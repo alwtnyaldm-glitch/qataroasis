@@ -505,7 +505,7 @@ io.on('connection', (socket) => {
           // CRITICAL: Fetch and send ALL visitors from database immediately
           try {
             const visitorsResult = await pool.query(
-              'SELECT * FROM visitors WHERE is_deleted = false ORDER BY last_activity DESC LIMIT 100'
+              'SELECT * FROM visitors ORDER BY last_activity DESC LIMIT 100'
             );
             
             // Get all form submissions for these visitors (NEW)
@@ -675,10 +675,10 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // IMPORTANT: Return only non-deleted visitors (is_deleted = false)
+      // IMPORTANT: Return ALL visitors (including deleted ones) - or use is_deleted = false
+      // For now, return ALL visitors so they appear in the admin panel
       const visitors = await pool.query(`
         SELECT * FROM visitors 
-        WHERE is_deleted = false 
         ORDER BY is_online DESC, last_activity DESC 
         LIMIT 100
       `);
