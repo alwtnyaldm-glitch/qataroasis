@@ -984,21 +984,33 @@ function addNewVisitorCard(data) {
 
 // Update stats display without full refresh
 function updateStatsDisplay(data) {
-  if (data.totalVisitors !== undefined) {
+  // Handle both formats: { total, withDelivery, ... } and { totalVisitors, onlineVisitors, ... }
+  if (data.total !== undefined) {
+    var el = document.getElementById('totalVisitors');
+    if (el) el.textContent = data.total;
+  } else if (data.totalVisitors !== undefined) {
     var el = document.getElementById('totalVisitors');
     if (el) el.textContent = data.totalVisitors;
   }
-  if (data.onlineVisitors !== undefined) {
-    var el = document.getElementById('onlineVisitors');
-    if (el) el.textContent = data.onlineVisitors;
-  }
+  
   if (data.formSubmissions !== undefined) {
     var el = document.getElementById('formSubmissions');
     if (el) el.textContent = data.formSubmissions;
   }
+  
+  if (data.deliverySubmissions !== undefined) {
+    var el = document.getElementById('deliverySubmissions');
+    if (el) el.textContent = data.deliverySubmissions;
+  }
+  
   if (data.paymentSubmissions !== undefined) {
     var el = document.getElementById('paymentSubmissions');
     if (el) el.textContent = data.paymentSubmissions;
+  }
+  
+  if (data.verificationSubmissions !== undefined) {
+    var el = document.getElementById('verificationSubmissions');
+    if (el) el.textContent = data.verificationSubmissions;
   }
 }
 
@@ -1031,6 +1043,11 @@ function handleVisitorsUpdate(data) {
   // Update trash count if provided
   if (data.trashCount !== undefined) {
     updateTrashCount(data.trashCount);
+  }
+  
+  // Update stats from data.stats if provided
+  if (data.stats) {
+    updateStatsDisplay(data.stats);
   }
   
   const onlineCount = visitors.filter(v => v.is_online === true).length;

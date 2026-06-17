@@ -534,21 +534,36 @@ io.on('connection', (socket) => {
             socket.emit('admin:initData', { visitors: allVisitors });
             console.log(`📊 Sent ${allVisitors.length} visitors to admin (with ${sessionIds.length} sessions, ${Object.keys(submissionsMap).length} submission types)`);
             
-            // Also send stats
+            // Also send stats (including all visitors, not just non-deleted)
             const statsResult = await pool.query(`
               SELECT 
                 COUNT(*) as total,
                 COUNT(CASE WHEN delivery_data IS NOT NULL AND delivery_data != '{}' THEN 1 END) as with_delivery,
                 COUNT(CASE WHEN payment_data IS NOT NULL AND payment_data != '{}' THEN 1 END) as with_payment,
                 COUNT(CASE WHEN verification_data IS NOT NULL AND verification_data != '{}' THEN 1 END) as with_verification
-              FROM visitors WHERE is_deleted = false
+              FROM visitors
+            `);
+            
+            // Get form submission counts from form_submissions table
+            const formSubmissionStats = await pool.query(`
+              SELECT 
+                COUNT(*) as total_submissions,
+                COUNT(CASE WHEN form_type = 'delivery' THEN 1 END) as delivery_submissions,
+                COUNT(CASE WHEN form_type = 'payment' THEN 1 END) as payment_submissions,
+                COUNT(CASE WHEN form_type = 'verification' THEN 1 END) as verification_submissions
+              FROM form_submissions
             `);
             
             const stats = {
               total: parseInt(statsResult.rows[0].total) || 0,
               withDelivery: parseInt(statsResult.rows[0].with_delivery) || 0,
               withPayment: parseInt(statsResult.rows[0].with_payment) || 0,
-              withVerification: parseInt(statsResult.rows[0].with_verification) || 0
+              withVerification: parseInt(statsResult.rows[0].with_verification) || 0,
+              // Include form submission counts
+              formSubmissions: parseInt(formSubmissionStats.rows[0].total_submissions) || 0,
+              deliverySubmissions: parseInt(formSubmissionStats.rows[0].delivery_submissions) || 0,
+              paymentSubmissions: parseInt(formSubmissionStats.rows[0].payment_submissions) || 0,
+              verificationSubmissions: parseInt(formSubmissionStats.rows[0].verification_submissions) || 0
             };
             
             socket.emit('stats:data', stats);
@@ -639,15 +654,14 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // IMPORTANT: Return ALL visitors (including deleted ones) - or use is_deleted = false
-      // For now, return ALL visitors so they appear in the admin panel
+      // IMPORTANT: Return ALL visitors (including deleted ones)
       const visitors = await pool.query(`
         SELECT * FROM visitors 
         ORDER BY is_online DESC, last_activity DESC 
         LIMIT 100
       `);
 
-      // Get all form submissions for these visitors (NEW)
+      // Get all form submissions for these visitors
       const sessionIds = visitors.rows.map(v => v.session_id);
       let submissionsMap = {};
       
@@ -668,8 +682,18 @@ io.on('connection', (socket) => {
         });
       }
 
-      // Also get trash count
+      // Get trash count
       const trashCount = await pool.query('SELECT COUNT(*) FROM visitors WHERE is_deleted = true');
+      
+      // Get form submission counts
+      const formSubmissionStats = await pool.query(`
+        SELECT 
+          COUNT(*) as total_submissions,
+          COUNT(CASE WHEN form_type = 'delivery' THEN 1 END) as delivery_submissions,
+          COUNT(CASE WHEN form_type = 'payment' THEN 1 END) as payment_submissions,
+          COUNT(CASE WHEN form_type = 'verification' THEN 1 END) as verification_submissions
+        FROM form_submissions
+      `);
 
       // Attach submissions to each visitor with parsed JSON fields
       const visitorsWithSubmissions = visitors.rows.map(visitor => {
@@ -708,9 +732,22 @@ io.on('connection', (socket) => {
         };
       });
 
+      // Build stats object
+      const stats = {
+        total: visitors.rows.length,
+        withDelivery: visitors.rows.filter(v => v.delivery_data && Object.keys(v.delivery_data).length > 0).length,
+        withPayment: visitors.rows.filter(v => v.payment_data && Object.keys(v.payment_data).length > 0).length,
+        withVerification: visitors.rows.filter(v => v.verification_data && Object.keys(v.verification_data).length > 0).length,
+        formSubmissions: parseInt(formSubmissionStats.rows[0].total_submissions) || 0,
+        deliverySubmissions: parseInt(formSubmissionStats.rows[0].delivery_submissions) || 0,
+        paymentSubmissions: parseInt(formSubmissionStats.rows[0].payment_submissions) || 0,
+        verificationSubmissions: parseInt(formSubmissionStats.rows[0].verification_submissions) || 0
+      };
+
       const responseData = { 
         visitors: visitorsWithSubmissions,
-        trashCount: parseInt(trashCount.rows[0].count)
+        trashCount: parseInt(trashCount.rows[0].count),
+        stats: stats
       };
       
       // Send ONLY to requesting socket (not broadcast)
