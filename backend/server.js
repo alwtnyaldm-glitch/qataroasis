@@ -141,12 +141,13 @@ io.on('connection', (socket) => {
       );
       
       // Notify admins of new visitor with FULL data
-      console.log(`📡 Broadcasting visitor:new to ${adminConnections.size} admins`);
+      const newVisitorData = {
+        ...visitorResult.rows[0],
+        timestamp: new Date()
+      };
+      console.log(`📡 Broadcasting visitor:new to ${adminConnections.size} admins:`, JSON.stringify(newVisitorData).substring(0, 200));
       adminConnections.forEach((adminSocket, socketId) => {
-        adminSocket.emit('visitor:new', {
-          ...visitorResult.rows[0],
-          timestamp: new Date()
-        });
+        adminSocket.emit('visitor:new', newVisitorData);
       });
 
       socket.emit('visitor:confirmed', { sessionId });

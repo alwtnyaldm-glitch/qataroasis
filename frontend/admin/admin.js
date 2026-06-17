@@ -444,18 +444,44 @@ function setupSocketListeners() {
   // CRITICAL: Real-time updates from visitors
   socket.on('visitor:new', (data) => {
     console.log('🆕 DATA RECEIVED VIA SOCKET (visitor:new):', data);
+    console.log('🆕 sessionId:', data.session_id || data.sessionId);
+    console.log('🆕 allAdminVisitors length:', allAdminVisitors.length);
+    console.log('🆕 visitorsCache size:', visitorsCache.size);
+    console.log('🆕 Grid element:', document.getElementById('visitorsGrid'));
+    
     // NO SOUND for new visitors - data updates should be silent
     const sessionId = data.session_id || data.sessionId;
     
+    if (!sessionId) {
+      console.error('❌ visitor:new received without sessionId!');
+      return;
+    }
+    
     // Check if card already exists
     const existingCard = document.querySelector('[data-session="' + sessionId + '"]');
+    console.log('🆕 Existing card:', existingCard);
     
     if (existingCard) {
       // Card exists - smart update and move to top
+      console.log('🆕 Updating existing card');
       updateCardAndMoveToTop(sessionId, data);
     } else {
-      // New card - full refresh to add it
-      updateVisitorsList();
+      // New card - add to DOM directly
+      console.log('🆕 Creating new card for visitor');
+      const grid = document.getElementById('visitorsGrid');
+      if (grid) {
+        createVisitorCardElement(data, grid);
+        
+        // Remove empty state if exists
+        const emptyState = grid.querySelector('.empty-state');
+        if (emptyState) emptyState.remove();
+      }
+    }
+    
+    // Also add to cache
+    visitorsCache.set(sessionId, data);
+    if (!allAdminVisitors.find(v => v.session_id === sessionId)) {
+      allAdminVisitors.unshift(data);
     }
     
     updateStats();
