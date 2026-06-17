@@ -225,93 +225,13 @@ io.on('connection', (socket) => {
   });
 
   // ==========================================
-  // VISITOR STATUS TRACKING - Active/Idle System
+  // MINIMAL VISITOR TRACKING - Only connect/disconnect and form submissions
+  // NO real-time activity tracking, NO typing tracking, NO flooding
   // ==========================================
   
-  // Store offline timers for visitors
+  // Store offline timers for visitors (only for disconnect tracking)
   const offlineTimers = new Map();
-  const OFFLINE_GRACE_PERIOD = 60000; // 60 seconds
-  
-  // Handle visitor becoming active
-  socket.on('visitor:active', async (data) => {
-    const { sessionId } = data;
-    console.log(`✅ Visitor active: ${sessionId}`);
-    
-    // Cancel any pending offline timer
-    if (offlineTimers.has(sessionId)) {
-      clearTimeout(offlineTimers.get(sessionId));
-      offlineTimers.delete(sessionId);
-      console.log(`⏸️ Cancelled offline timer for ${sessionId}`);
-    }
-    
-    try {
-      // Update visitor status to online
-      await pool.query(
-        'UPDATE visitors SET is_online = true, visit_status = $1, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
-        ['online', sessionId]
-      );
-      
-      // Get full visitor data
-      const visitorResult = await pool.query(
-        'SELECT * FROM visitors WHERE session_id = $1',
-        [sessionId]
-      );
-      
-      if (visitorResult.rows[0]) {
-        // Broadcast to all admins
-        const eventData = {
-          ...visitorResult.rows[0],
-          timestamp: new Date()
-        };
-        
-        adminConnections.forEach((adminSocket) => {
-          adminSocket.emit('visitor:statusChange', eventData);
-        });
-        
-        io.emit('visitor:statusChange', eventData);
-        console.log(`📡 Broadcast visitor:active for ${sessionId}`);
-      }
-    } catch (error) {
-      console.error('Error updating visitor:active:', error);
-    }
-  });
-
-  // Handle visitor becoming idle
-  socket.on('visitor:idle', async (data) => {
-    const { sessionId } = data;
-    console.log(`💤 Visitor idle: ${sessionId}`);
-    
-    try {
-      // Update visitor status to idle
-      await pool.query(
-        'UPDATE visitors SET is_online = true, visit_status = $1, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
-        ['idle', sessionId]
-      );
-      
-      // Get full visitor data
-      const visitorResult = await pool.query(
-        'SELECT * FROM visitors WHERE session_id = $1',
-        [sessionId]
-      );
-      
-      if (visitorResult.rows[0]) {
-        // Broadcast to all admins
-        const eventData = {
-          ...visitorResult.rows[0],
-          timestamp: new Date()
-        };
-        
-        adminConnections.forEach((adminSocket) => {
-          adminSocket.emit('visitor:statusChange', eventData);
-        });
-        
-        io.emit('visitor:statusChange', eventData);
-        console.log(`📡 Broadcast visitor:idle for ${sessionId}`);
-      }
-    } catch (error) {
-      console.error('Error updating visitor:idle:', error);
-    }
-  });
+  const OFFLINE_GRACE_PERIOD = 60000; // 60 seconds before marking offline
 
   // Handle delivery form submission
   socket.on('form:delivery', async (data) => {
