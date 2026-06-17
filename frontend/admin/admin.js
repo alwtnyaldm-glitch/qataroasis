@@ -2550,34 +2550,50 @@ async function logoutAllDevices() {
 document.addEventListener('DOMContentLoaded', async () => {
   // Check for existing valid session first
   const savedToken = localStorage.getItem('admin_token');
+  console.log('🔍 Page loaded, savedToken:', savedToken ? 'exists' : 'null');
   
   if (savedToken) {
     // Try to reconnect with existing token
     console.log('🔐 Found saved token, attempting reconnection...');
     
     // Connect socket first
-    await new Promise((resolve) => {
-      initAdminSocket(savedToken).then(() => {
-        resolve();
-      }).catch(() => {
-        resolve();
+    try {
+      await new Promise((resolve, reject) => {
+        initAdminSocket(savedToken).then(() => {
+          console.log('✅ Socket connected');
+          resolve();
+        }).catch((err) => {
+          console.error('❌ Socket connection failed:', err);
+          resolve(); // Don't reject, just continue
+        });
       });
-    });
-    
-    // Validate session
-    if (socket && socket.connected) {
-      const isValid = await validateAdminSession();
-      if (isValid) {
-        console.log('✅ Session valid, loading dashboard...');
-        // Continue to set up event listeners, but skip login form
-        setupEventListeners(true);
-        return;
+      
+      // Small delay to ensure socket is ready
+      await new Promise(r => setTimeout(r, 500));
+      
+      // Validate session
+      if (socket && socket.connected) {
+        console.log('📡 Socket is connected, validating session...');
+        const isValid = await validateAdminSession();
+        console.log('📊 Validation result:', isValid);
+        if (isValid) {
+          console.log('✅ Session valid, loading dashboard...');
+          // Continue to set up event listeners, but skip login form
+          setupEventListeners(true);
+          return;
+        }
+      } else {
+        console.log('⚠️ Socket not connected');
       }
+    } catch (err) {
+      console.error('❌ Error during reconnection:', err);
     }
+  } else {
+    console.log('🔒 No saved token found');
   }
   
   // No valid session - show login page
-  console.log('🔒 No valid session, showing login page');
+  console.log('🔒 Showing login page');
   showLoginPage();
   clearAdminData();
   
@@ -2670,18 +2686,25 @@ function clearAdminData() {
 
 // Validate admin session
 async function validateAdminSession() {
+  console.log('🔍 validateAdminSession called');
+  
   if (!socket || !socket.connected) {
+    console.log('❌ Socket not connected');
     showLoginPage();
-    return;
+    return false;
   }
   
   if (!adminToken) {
+    console.log('❌ No admin token');
     showLoginPage();
-    return;
+    return false;
   }
+  
+  console.log('📤 Sending admin:validate with token:', adminToken);
   
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
+      console.log('⏰ Validation timeout');
       showLoginPage();
       resolve(false);
     }, 5000);
@@ -2689,8 +2712,10 @@ async function validateAdminSession() {
     socket.emit('admin:validate', { sessionToken: adminToken });
     
     socket.once('admin:valid', (data) => {
+      console.log('📥 Received admin:valid:', data);
       clearTimeout(timeout);
       if (data.valid) {
+        console.log('✅ Session valid!');
         showDashboard();
         showTab('stats');
         // Request data after validation
@@ -2698,6 +2723,7 @@ async function validateAdminSession() {
         socket.emit('stats:request');
         resolve(true);
       } else {
+        console.log('❌ Session invalid:', data.reason);
         showLoginPage();
         resolve(false);
       }

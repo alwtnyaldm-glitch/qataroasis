@@ -608,6 +608,7 @@ io.on('connection', (socket) => {
   socket.on('admin:validate', async (data) => {
     try {
       const { sessionToken } = data;
+      console.log('🔐 admin:validate received, token:', sessionToken ? 'provided' : 'missing');
       
       // Check if session exists, is current, AND not expired
       const result = await pool.query(
@@ -616,6 +617,8 @@ io.on('connection', (socket) => {
         [sessionToken]
       );
 
+      console.log('🔐 Session query result:', result.rows.length > 0 ? 'found' : 'not found');
+      
       if (result.rows.length > 0) {
         clientInfo.isAdmin = true;
         adminConnections.set(socket.id, socket);
@@ -628,17 +631,18 @@ io.on('connection', (socket) => {
           loginAt: session.created_at
         });
         
-        // Extend session on activity (optional: refresh expires_at)
-        // This keeps the session alive as long as admin is active
+        console.log('🔐 Sent admin:valid with valid: true');
       } else {
         // Session expired or invalid - delete it
         if (sessionToken) {
+          console.log('🔐 Session invalid, deleting from database');
           await pool.query(
             'DELETE FROM admin_sessions WHERE session_token = $1',
             [sessionToken]
           );
         }
         socket.emit('admin:valid', { valid: false, reason: 'session_expired' });
+        console.log('🔐 Sent admin:valid with valid: false');
       }
     } catch (error) {
       console.error('Error validating admin session:', error);
