@@ -133,6 +133,16 @@ io.on('connection', (socket) => {
           current_page = $6,
           last_activity = CURRENT_TIMESTAMP
       `, [sessionId, ip, geo?.country || 'Unknown', geo?.country || 'XX', userAgent, page]);
+      
+      // Track visitor as online in memory
+      isOnlineVisitors.add(sessionId);
+      
+      // Cancel any pending offline timer if visitor reconnects
+      if (offlineTimers.has(sessionId)) {
+        clearTimeout(offlineTimers.get(sessionId));
+        offlineTimers.delete(sessionId);
+        console.log(`🔄 Reconnected: cancelled offline timer for ${sessionId}`);
+      }
 
       // Get full visitor data
       const visitorResult = await pool.query(
@@ -232,6 +242,9 @@ io.on('connection', (socket) => {
   // Store offline timers for visitors (only for disconnect tracking)
   const offlineTimers = new Map();
   const OFFLINE_GRACE_PERIOD = 60000; // 60 seconds before marking offline
+  
+  // Track which visitors are currently online (for is_online status)
+  const isOnlineVisitors = new Set();
 
   // Handle delivery form submission
   socket.on('form:delivery', async (data) => {
@@ -1092,6 +1105,7 @@ io.on('connection', (socket) => {
               }
               
               offlineTimers.delete(client.sessionId);
+              isOnlineVisitors.delete(client.sessionId);
               console.log(`📴 Visitor ${client.sessionId} marked OFFLINE`);
             } catch (error) {
               console.error('Error marking visitor offline:', error);
