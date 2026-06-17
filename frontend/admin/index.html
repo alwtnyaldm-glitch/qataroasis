@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>لوحة التحكم - مياه واحة عمان</title>
+  <title>لوحة التحكم - مياه واحة قطر</title>
   <link rel="stylesheet" href="admin.css?v=20260617-1">
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
@@ -20,7 +20,7 @@
       <div class="login-logo">
         <span>💧</span>
         <h1>لوحة التحكم</h1>
-        <p>مياه واحة  - Oman Oasis Water</p>
+        <p>مياه واحة  -  Oasis Water</p>
       </div>
       <form id="loginForm">
         <div class="form-group">
@@ -131,22 +131,22 @@
             <div class="stat-card success">
               <div class="icon">🟢</div>
               <div class="number" id="onlineVisitors">0</div>
-              <div class="label">متصلين الآن</div>
+              <div class="label">متصل الآن</div>
             </div>
             <div class="stat-card warning">
               <div class="icon">📝</div>
               <div class="number" id="formSubmissions">0</div>
-              <div class="label">نماذج التوصيل</div>
+              <div class="label"> التوصيل</div>
             </div>
             <div class="stat-card danger">
               <div class="icon">💳</div>
               <div class="number" id="paymentSubmissions">0</div>
-              <div class="label">بيانات الدفع</div>
+              <div class="label"> الدفع</div>
             </div>
           </div>
 
           <div class="form-container">
-            <h3>🌍 الدول  </h3>
+            <h3>🌍 الزيارات من الدول  </h3>
             <div id="countryList" class="country-list">
               <p style="color:var(--text-muted);text-align:center;">جاري التحميل...</p>
             </div>
@@ -218,7 +218,7 @@
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">اسم المنتج (عربي) *</label>
-                  <input type="text" id="productNameAr" class="form-control" required placeholder="مثال: مياه واحة عمان">
+                  <input type="text" id="productNameAr" class="form-control" required placeholder="مثال: مياه واحة قطر">
                 </div>
                 <div class="form-group">
                   <label class="form-label">اسم المنتج (إنجليزي)</label>
@@ -227,16 +227,16 @@
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label class="form-label">السعر (ر.ع) *</label>
+                  <label class="form-label">السعر (ر.ق) *</label>
                   <input type="number" id="productPrice" class="form-control" required step="0.01" min="0" placeholder="2.50">
                 </div>
                 <div class="form-group">
-                  <label class="form-label">المخزون</label>
+                  <label class="form-label">عدد المنتات الاجمالي</label>
                   <input type="number" id="productStock" class="form-control" min="0" placeholder="100">
                 </div>
               </div>
               <div class="form-group">
-                <label class="form-label">صورة المنتج</label>
+                <label class="form-label">تحميل صورة المنتج </label>
                 <input type="file" id="productImage" class="form-control" accept="image/*">
                 <input type="hidden" id="currentProductImage" value="">
               </div>
@@ -250,7 +250,7 @@
               </div>
               <div style="display:flex;gap:8px;">
                 <button type="submit" class="btn btn-success" style="flex:1;">
-                  💾 حفظ المنتج
+                  💾 حفظ 
                 </button>
                 <button type="button" class="btn btn-secondary" onclick="resetProductForm()" style="flex:1;">
                   🔄 إلغاء
