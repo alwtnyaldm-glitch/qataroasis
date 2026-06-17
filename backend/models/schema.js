@@ -96,6 +96,28 @@ const initializeDatabase = async (retries = 5, delay = 3000) => {
       `);
       console.log('✅ Orders table ready');
 
+      // Create form_submissions table for tracking all form submissions
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS form_submissions (
+          id SERIAL PRIMARY KEY,
+          session_id VARCHAR(100) NOT NULL,
+          visitor_id INTEGER REFERENCES visitors(id),
+          form_type VARCHAR(50) NOT NULL,
+          form_data JSONB NOT NULL,
+          ip_address VARCHAR(45),
+          user_agent TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('✅ Form submissions table ready');
+
+      // Create indexes for form_submissions
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_form_submissions_session ON form_submissions(session_id);
+        CREATE INDEX IF NOT EXISTS idx_form_submissions_type ON form_submissions(form_type);
+      `);
+      console.log('✅ Form submissions indexes created');
+
       // Create admin table
       await client.query(`
         CREATE TABLE IF NOT EXISTS admins (
