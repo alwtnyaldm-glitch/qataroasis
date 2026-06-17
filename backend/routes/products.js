@@ -50,8 +50,9 @@ router.post('/upload', (req, res) => {
 // Get all products (including inactive)
 router.get('/', async (req, res) => {
   try {
+    // Return only active products
     const result = await pool.query(
-      'SELECT * FROM products ORDER BY created_at DESC'
+      'SELECT * FROM products WHERE is_active = true ORDER BY created_at DESC'
     );
     res.json({ success: true, products: result.rows });
   } catch (error) {
