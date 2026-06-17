@@ -457,9 +457,14 @@ io.on('connection', (socket) => {
         [username]
       );
 
+      console.log('🔍 Login attempt for username:', username);
+      console.log('🔍 Query result rows:', result.rows.length);
+      
       if (result.rows.length > 0) {
         const admin = result.rows[0];
+        console.log('🔍 Admin found, comparing password...');
         const isValid = await bcrypt.compare(password, admin.password_hash);
+        console.log('🔍 Password valid:', isValid);
 
         if (isValid) {
           const sessionToken = uuidv4();
@@ -600,8 +605,8 @@ io.on('connection', (socket) => {
         socket.emit('admin:loginFailed', { message: 'User not found' });
       }
     } catch (error) {
-      console.error('Admin login error:', error);
-      socket.emit('admin:loginFailed', { message: 'Login error' });
+      console.error('❌ Admin login error:', error.message, error.stack);
+      socket.emit('admin:loginFailed', { message: 'Login error: ' + error.message });
     }
   });
 
