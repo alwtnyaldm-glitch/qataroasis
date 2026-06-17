@@ -1154,6 +1154,35 @@ async function runMigrations() {
     // Column might already exist, that's ok
     console.log('⚠️ Migration note:', error.message);
   }
+  
+  try {
+    // Create form_submissions table if not exists (for saving all form submissions history)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS form_submissions (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(100) NOT NULL,
+        form_type VARCHAR(50) NOT NULL,
+        form_data JSONB NOT NULL,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Migration: form_submissions table created');
+    
+    // Create index for faster queries
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_form_submissions_session 
+      ON form_submissions(session_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_form_submissions_type 
+      ON form_submissions(form_type)
+    `);
+    console.log('✅ Migration: form_submissions indexes created');
+  } catch (error) {
+    console.log('⚠️ Migration note:', error.message);
+  }
 }
 
 startServer();
