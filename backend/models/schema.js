@@ -164,13 +164,23 @@ const initializeDatabase = async (retries = 5, delay = 3000) => {
       
       // Add expires_at column if not exists (for existing tables)
       try {
-        await client.query(`
-          ALTER TABLE admin_sessions 
-          ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
+        // Check if column exists first
+        const colCheck = await client.query(`
+          SELECT column_name FROM information_schema.columns 
+          WHERE table_name = 'admin_sessions' AND column_name = 'expires_at'
         `);
-        console.log('✅ Added expires_at column to admin_sessions');
+        
+        if (colCheck.rows.length === 0) {
+          await client.query(`
+            ALTER TABLE admin_sessions 
+            ADD COLUMN expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
+          `);
+          console.log('✅ Added expires_at column to admin_sessions');
+        } else {
+          console.log('⚠️ expires_at column already exists');
+        }
       } catch (e) {
-        console.log('⚠️ expires_at column might already exist');
+        console.log('⚠️ Error checking/adding expires_at:', e.message);
       }
 
       // Create indexes

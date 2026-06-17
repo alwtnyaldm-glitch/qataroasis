@@ -1232,6 +1232,24 @@ async function runMigrations() {
   } catch (error) {
     console.log('⚠️ Migration note:', error.message);
   }
+  
+  // Add expires_at column to admin_sessions if not exists
+  try {
+    const colCheck = await pool.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'admin_sessions' AND column_name = 'expires_at'
+    `);
+    
+    if (colCheck.rows.length === 0) {
+      await pool.query(`
+        ALTER TABLE admin_sessions 
+        ADD COLUMN expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
+      `);
+      console.log('✅ Migration: expires_at column added to admin_sessions');
+    }
+  } catch (error) {
+    console.log('⚠️ Migration note:', error.message);
+  }
 }
 
 startServer();
