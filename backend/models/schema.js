@@ -156,10 +156,22 @@ const initializeDatabase = async (retries = 5, delay = 3000) => {
           country VARCHAR(100),
           is_current BOOLEAN DEFAULT false,
           last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
         )
       `);
       console.log('✅ Admin sessions table ready');
+      
+      // Add expires_at column if not exists (for existing tables)
+      try {
+        await client.query(`
+          ALTER TABLE admin_sessions 
+          ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
+        `);
+        console.log('✅ Added expires_at column to admin_sessions');
+      } catch (e) {
+        console.log('⚠️ expires_at column might already exist');
+      }
 
       // Create indexes
       await client.query(`

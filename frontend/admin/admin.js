@@ -346,7 +346,18 @@ function setupSocketListeners() {
     console.log('🔐 Admin validation result:', data);
     if (!data.valid) {
       localStorage.removeItem('admin_token');
+      localStorage.removeItem('admin_login_time');
       adminToken = null;
+      
+      // Show session expired message if applicable
+      if (data.reason === 'session_expired') {
+        showNotification('انتهت جلستك', 'انتهت صلاحية جلستك، يرجى تسجيل الدخول مجدداً', 'warning');
+      }
+    } else {
+      // Session is valid - save login time if provided
+      if (data.loginAt) {
+        localStorage.setItem('admin_login_time', data.loginAt);
+      }
     }
   });
 
@@ -354,6 +365,7 @@ function setupSocketListeners() {
     console.log('🔐 Admin login success:', data);
     if (data.sessionToken) {
       localStorage.setItem('admin_token', data.sessionToken);
+      localStorage.setItem('admin_login_time', new Date().toISOString());
       adminToken = data.sessionToken;
     }
     // Request initial data after successful login
@@ -368,6 +380,7 @@ function setupSocketListeners() {
 
   socket.on('admin:forceLogout', () => {
     localStorage.removeItem('admin_token');
+    localStorage.removeItem('admin_login_time');
     adminToken = null;
     showNotification('انتهت جلستك', 'تم تسجيل خروجك من جميع الأجهزة', 'warning');
     setTimeout(() => showLoginPage(), 2000);
@@ -2535,9 +2548,44 @@ async function logoutAllDevices() {
 
 // Initialize - SECURE: NO socket connection on page load
 document.addEventListener('DOMContentLoaded', async () => {
-  // Show login page initially - NO socket connection until login
+  // Check for existing valid session first
+  const savedToken = localStorage.getItem('admin_token');
+  
+  if (savedToken) {
+    // Try to reconnect with existing token
+    console.log('🔐 Found saved token, attempting reconnection...');
+    
+    // Connect socket first
+    await new Promise((resolve) => {
+      initAdminSocket(savedToken).then(() => {
+        resolve();
+      }).catch(() => {
+        resolve();
+      });
+    });
+    
+    // Validate session
+    if (socket && socket.connected) {
+      const isValid = await validateAdminSession();
+      if (isValid) {
+        console.log('✅ Session valid, loading dashboard...');
+        // Continue to set up event listeners, but skip login form
+        setupEventListeners(true);
+        return;
+      }
+    }
+  }
+  
+  // No valid session - show login page
+  console.log('🔒 No valid session, showing login page');
   showLoginPage();
   clearAdminData();
+  
+  // Set up event listeners including login form
+  setupEventListeners(false);
+});
+
+function setupEventListeners(skipLogin = false) {
   
   // Mobile tab bar - Show/hide based on screen size
   const mobileTabBar = document.querySelector('.mobile-tab-bar');
@@ -2551,19 +2599,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkMobile();
   window.addEventListener('resize', checkMobile);
   
-  // Login form
-  document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-    const success = await adminLogin(username, password);
-    if (success) {
-      showDashboard();
-      showTab('stats');
-    } else {
-      showNotification('خطأ', 'اسم المستخدم أو كلمة المرور غير صحيحة', 'error');
-    }
-  });
+  // Login form - only set up if not skipping login
+  if (!skipLogin) {
+    document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const success = await adminLogin(username, password);
+      if (success) {
+        showDashboard();
+        showTab('stats');
+      } else {
+        showNotification('خطأ', 'اسم المستخدم أو كلمة المرور غير صحيحة', 'error');
+      }
+    });
+  }
   
   // Product form
   document.getElementById('productForm')?.addEventListener('submit', async (e) => {
@@ -2583,6 +2633,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Clear all sensitive data
     localStorage.removeItem('admin_token');
     localStorage.removeItem('admin_user');
+    localStorage.removeItem('admin_login_time');
     adminToken = null;
     
     // Clear in-memory data
@@ -2593,7 +2644,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   
   // NO MORE POLLING - Real-time updates via WebSockets!
-});
+}
 
 // Clear all admin data from memory
 function clearAdminData() {

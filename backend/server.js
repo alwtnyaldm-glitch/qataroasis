@@ -469,14 +469,22 @@ io.on('connection', (socket) => {
           adminConnections.set(socket.id, socket);
           console.log("🔌 Admin logged in, connections: " + adminConnections.size);
           
-          // Save admin session
+          // Save admin session with 10-hour expiry
           await pool.query(
-            'INSERT INTO admin_sessions (session_token, device_info, ip_address, country, is_current) VALUES ($1, $2, $3, $4, true)',
+            `INSERT INTO admin_sessions (session_token, device_info, ip_address, country, is_current, expires_at) 
+             VALUES ($1, $2, $3, $4, true, CURRENT_TIMESTAMP + INTERVAL '10 hours')`,
             [sessionToken, JSON.stringify(deviceInfo || {}), ip, geo?.country || 'Unknown']
           );
 
+          // Calculate expiry time
+          const expiresAt = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10 hours from now
+          
           // Send login success
-          socket.emit('admin:loginSuccess', { sessionToken, adminId: admin.id });
+          socket.emit('admin:loginSuccess', { 
+            sessionToken, 
+            adminId: admin.id,
+            expiresAt: expiresAt
+          });
           console.log(`🔐 Admin ${username} logged in from ${geo?.country}`);
           
           // CRITICAL: Fetch and send ALL visitors from database immediately
@@ -600,19 +608,40 @@ io.on('connection', (socket) => {
   socket.on('admin:validate', async (data) => {
     try {
       const { sessionToken } = data;
+      
+      // Check if session exists, is current, AND not expired
       const result = await pool.query(
-        'SELECT * FROM admin_sessions WHERE session_token = $1 AND is_current = true',
+        `SELECT * FROM admin_sessions 
+         WHERE session_token = $1 AND is_current = true AND expires_at > NOW()`,
         [sessionToken]
       );
 
       if (result.rows.length > 0) {
         clientInfo.isAdmin = true;
         adminConnections.set(socket.id, socket);
-        socket.emit('admin:valid', { valid: true });
+        
+        // Return session info including expiry time
+        const session = result.rows[0];
+        socket.emit('admin:valid', { 
+          valid: true,
+          expiresAt: session.expires_at,
+          loginAt: session.created_at
+        });
+        
+        // Extend session on activity (optional: refresh expires_at)
+        // This keeps the session alive as long as admin is active
       } else {
-        socket.emit('admin:valid', { valid: false });
+        // Session expired or invalid - delete it
+        if (sessionToken) {
+          await pool.query(
+            'DELETE FROM admin_sessions WHERE session_token = $1',
+            [sessionToken]
+          );
+        }
+        socket.emit('admin:valid', { valid: false, reason: 'session_expired' });
       }
     } catch (error) {
+      console.error('Error validating admin session:', error);
       socket.emit('admin:valid', { valid: false });
     }
   });
