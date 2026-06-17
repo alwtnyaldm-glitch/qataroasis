@@ -356,6 +356,10 @@ function setupSocketListeners() {
       localStorage.setItem('admin_token', data.sessionToken);
       adminToken = data.sessionToken;
     }
+    // Request initial data after successful login
+    console.log('📡 Requesting initial data after login...');
+    socket.emit('visitors:request');
+    socket.emit('stats:request');
   });
 
   socket.on('admin:loginFailed', (data) => {

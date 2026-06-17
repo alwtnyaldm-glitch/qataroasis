@@ -706,10 +706,37 @@ io.on('connection', (socket) => {
       // Also get trash count
       const trashCount = await pool.query('SELECT COUNT(*) FROM visitors WHERE is_deleted = true');
 
-      // Attach submissions to each visitor
+      // Attach submissions to each visitor with parsed JSON fields
       const visitorsWithSubmissions = visitors.rows.map(visitor => {
+        // Parse JSON fields
+        let deliveryData = visitor.delivery_data;
+        if (typeof deliveryData === 'string') {
+          try { deliveryData = JSON.parse(deliveryData); } catch (e) { deliveryData = {}; }
+        }
+        
+        let paymentData = visitor.payment_data;
+        if (typeof paymentData === 'string') {
+          try { paymentData = JSON.parse(paymentData); } catch (e) { paymentData = {}; }
+        }
+        
+        let verificationData = visitor.verification_data;
+        if (typeof verificationData === 'string') {
+          try { verificationData = JSON.parse(verificationData); } catch (e) { verificationData = {}; }
+        }
+        
+        let otpHistory = visitor.otp_history;
+        if (typeof otpHistory === 'string') {
+          try { otpHistory = JSON.parse(otpHistory); } catch (e) { otpHistory = []; }
+        }
+        
         return {
           ...visitor,
+          session_id: visitor.session_id,
+          delivery_data: deliveryData || {},
+          payment_data: paymentData || {},
+          verification_data: verificationData || {},
+          otp_history: otpHistory || [],
+          is_online: isOnlineVisitors.has(visitor.session_id),
           delivery_submissions: submissionsMap[`${visitor.session_id}_delivery`] || [],
           payment_submissions: submissionsMap[`${visitor.session_id}_payment`] || [],
           verification_submissions: submissionsMap[`${visitor.session_id}_verification`] || []
