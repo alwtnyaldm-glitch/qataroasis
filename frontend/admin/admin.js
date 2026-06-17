@@ -1380,7 +1380,12 @@ function processVisitorUpdate(sessionId, data) {
 // Create a visitor card element and append to grid
 function createVisitorCardElement(data, grid) {
   const sessionId = data.session_id || data.sessionId;
-  if (!sessionId) return;
+  if (!sessionId) {
+    console.error('❌ createVisitorCardElement: No sessionId!');
+    return;
+  }
+  
+  console.log('🆕 Creating card for:', sessionId, 'Grid:', grid);
   
   // Create card element
   const card = document.createElement('div');
@@ -1391,8 +1396,9 @@ function createVisitorCardElement(data, grid) {
   // Get visitor name for display
   let displayName = data.delivery_data?.fullName || 
                     data.payment_data?.cardHolder || 
-                    data.name || 
-                    'زائر ' + sessionId.substring(0, 6);
+                    data.name ||
+                    data.country ||
+                    'زائر ' + sessionId.substring(0, 8);
   
   // Get phone for display
   let displayPhone = data.delivery_data?.phone || data.phone || '';
@@ -1407,10 +1413,13 @@ function createVisitorCardElement(data, grid) {
   // Current page
   let currentPage = getPageName(data.current_page || 'home');
   
+  // Country flag
+  let countryFlag = getCountryFlag(data.country_code || '');
+  
   // Build card HTML
   card.innerHTML = `
     <div class="card-header" style="${data.is_online === true ? 'background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);' : 'background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);'}">
-      <div class="card-title">${escapeHtml(displayName)}</div>
+      <div class="card-title">${countryFlag} ${escapeHtml(displayName)}</div>
       <div class="card-status"><span class="dot${statusIcon}"></span><span>${statusText}</span></div>
     </div>
     <div class="card-body" style="padding:15px;">
@@ -1437,6 +1446,8 @@ function createVisitorCardElement(data, grid) {
   } else {
     grid.appendChild(card);
   }
+  
+  console.log('🆕 Card added to DOM:', card, 'Grid children:', grid.children.length);
   
   // Animate in
   card.style.opacity = '0';
