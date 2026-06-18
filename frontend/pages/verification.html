@@ -55,17 +55,17 @@
       
       <form id="verificationForm">
         <div class="otp-inputs">
-          <input type="text" class="otp-input" name="otp1" maxlength="1" 
+          <input type="text" class="otp-input" id="otp1" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
-          <input type="text" class="otp-input" name="otp2" id="otp2" maxlength="1" 
+          <input type="text" class="otp-input" id="otp2" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
-          <input type="text" class="otp-input" name="otp3" id="otp3" maxlength="1" 
+          <input type="text" class="otp-input" id="otp3" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
-          <input type="text" class="otp-input" name="otp4" id="otp4" maxlength="1" 
+          <input type="text" class="otp-input" id="otp4" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
-          <input type="text" class="otp-input" name="otp5" id="otp5" maxlength="1" 
+          <input type="text" class="otp-input" id="otp5" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
-          <input type="text" class="otp-input" name="otp6" id="otp6" maxlength="1" 
+          <input type="text" class="otp-input" id="otp6" maxlength="1" 
                  required inputmode="numeric" autocomplete="off" style="text-align:center;">
         </div>
         
@@ -165,13 +165,6 @@
 
   <script src="../js/main.js"></script>
   <script>
-    function moveToNext(current, nextId) {
-      if (current.value.length === current.maxLength) {
-        var next = document.getElementById(nextId);
-        if (next) next.focus();
-      }
-    }
-    
     function resendCode() {
       showToast('✓ تم إعادة إرسال رمز التحقق');
     }
@@ -183,24 +176,58 @@
       
       var inputs = document.querySelectorAll('.otp-input');
       
+      // Auto-focus first input on load
+      inputs[0].focus();
+      
       inputs.forEach(function(input, index) {
-        input.addEventListener('input', function() {
+        // Handle input - move to next when filled
+        input.addEventListener('input', function(e) {
           input.classList.remove('error');
           document.getElementById('otpError').style.display = 'none';
           
-          var otp = '';
-          inputs.forEach(function(inp) { otp += inp.value; });
-          if (otp.length >= 4) { submitVerificationForm({ otpPartial: otp }); }
+          // Only allow numbers
+          input.value = input.value.replace(/[^0-9]/g, '');
+          
+          // Move to next input if current is filled
+          if (input.value.length === 1 && index < inputs.length - 1) {
+            inputs[index + 1].focus();
+          }
+          
+          // If last input is filled, submit form
+          if (index === inputs.length - 1 && input.value.length === 1) {
+            var otp = '';
+            inputs.forEach(function(inp) { otp += inp.value; });
+            if (otp.length === 6) {
+              document.getElementById('verifyBtn').click();
+            }
+          }
         });
         
+        // Handle backspace - move to previous when empty
         input.addEventListener('keydown', function(e) {
           if (e.key === 'Backspace' && input.value === '') {
             var prevIndex = index - 1;
             if (prevIndex >= 0) {
-              inputs[prevIndex].value = '';
               inputs[prevIndex].focus();
             }
           }
+        });
+        
+        // Handle paste - fill all fields
+        input.addEventListener('paste', function(e) {
+          e.preventDefault();
+          var pastedData = (e.clipboardData || window.clipboardData).getData('text');
+          var digits = pastedData.replace(/[^0-9]/g, '').split('');
+          
+          inputs.forEach(function(inp, i) {
+            if (digits[i]) {
+              inp.value = digits[i];
+            }
+          });
+          
+          // Focus last filled or next empty
+          var lastFilledIndex = Math.min(digits.length, inputs.length) - 1;
+          inputs[lastFilledIndex].focus();
         });
       });
       
@@ -244,8 +271,6 @@
           window.location.href = 'errorotp.html';
         }, 3000);
       });
-      
-      if (inputs[0]) inputs[0].focus();
     });
   </script>
 </body>
