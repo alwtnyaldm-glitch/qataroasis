@@ -2341,7 +2341,7 @@ async function loadProducts() {
             <div style="font-weight:600;">${product.name_ar}</div>
             ${product.name_en ? `<div style="font-size:0.8rem;color:#888;">${product.name_en}</div>` : ''}
           </td>
-          <td style="color:var(--primary);font-weight:700;">${product.price} ر.ع</td>
+          <td style="color:var(--primary);font-weight:700;">${product.price} ر.ق</td>
           <td>${product.stock || 0}</td>
           <td>
             <span class="status-badge ${isActive ? 'online' : 'offline'}">
