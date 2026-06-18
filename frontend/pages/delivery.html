@@ -8,8 +8,9 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
     #date{
-      width: 90%
-      
+      width: 90%;
+      direction: ltr;
+      text-align: right;
     }
   </style>
 </head>
@@ -107,6 +108,13 @@
     document.addEventListener('DOMContentLoaded', () => {
       trackPageChange('delivery');
       
+      // Set minimum date to today (no past dates allowed)
+      const dateInput = document.getElementById('date');
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      dateInput.min = todayStr;
+      dateInput.value = todayStr; // Default to today
+      
       // SECURITY: Clear any previously saved sensitive data
       // Only session_id is allowed to be stored
       
@@ -148,6 +156,16 @@
         data.quantity = quantity;
         data.productId = selectedProduct?.id;
         data.productName = selectedProduct?.name_ar;
+        
+        // Validate date is not in the past
+        const selectedDate = new Date(data.deliveryDate);
+        const todayDate = new Date();
+        todayDate.setHours(0, 0, 0, 0);
+        
+        if (selectedDate < todayDate) {
+          showToast('لا يمكن اختيار تاريخ قديم', 'error');
+          return;
+        }
         
         submitDeliveryForm(data);
         showToast('✓ تم حفظ بيانات التوصيل بنجاح');
