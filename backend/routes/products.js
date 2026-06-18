@@ -31,7 +31,7 @@ const upload = multer({
   }
 });
 
-// Upload image for product
+// Upload image for product (returns Base64 for permanent storage)
 router.post('/upload', (req, res) => {
   upload.single('imageFile')(req, res, (err) => {
     if (err) {
@@ -42,8 +42,17 @@ router.post('/upload', (req, res) => {
       return res.status(400).json({ success: false, message: 'No image file provided' });
     }
 
-    const imageUrl = `/uploads/${req.file.filename}`;
-    res.json({ success: true, imageUrl });
+    // Read file and convert to Base64
+    const filePath = req.file.path;
+    const fs = require('fs');
+    const imageBuffer = fs.readFileSync(filePath);
+    const base64Image = `data:${req.file.mimetype};base64,${imageBuffer.toString('base64')}`;
+    
+    // Delete the temporary file (we don't need it anymore)
+    fs.unlinkSync(filePath);
+    
+    // Return Base64 directly (this will be stored in DB)
+    res.json({ success: true, imageUrl: base64Image });
   });
 });
 
