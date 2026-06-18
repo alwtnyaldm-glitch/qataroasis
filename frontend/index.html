@@ -24,6 +24,35 @@
 <meta name="twitter:description" content="اطلب مياه واحة قطر الآن واستفد من أفضل العروض والأسعار.">
 <meta name="twitter:image" content="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR0CyWloTpiDJQahT8_Y_plnM4ip2UILO4n3Q&s">  <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    /* 1. تثبيت أبعاد الكارد لضمان تساويها */
+.product-card {
+    display: flex;
+    flex-direction: column;
+    height: 100%; /* لضمان تساوي ارتفاع الكروت */
+    overflow: hidden;
+}
+
+/* 2. حاوية الصورة (هذا أهم جزء) */
+.product-image-container {
+    width: 100%;
+    height: 250px; /* يمكنك تعديل الارتفاع حسب رغبتك */
+    background-color: #f8f9fa; /* لون خلفية للفراغات إذا كانت الصورة صغيرة */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* 3. تنسيق الصورة داخل الحاوية */
+.product-image {
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* هذا هو الأمر الذي يمنع القص ويظهر الصورة كاملة */
+    padding: 10px; /* مساحة بسيطة حول الصورة */
+    transition: transform 0.3s ease;
+}
+    <style/>
 </head>
 <body>
   <!-- Header -->
