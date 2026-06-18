@@ -1250,6 +1250,22 @@ async function runMigrations() {
   } catch (error) {
     console.log('⚠️ Migration note:', error.message);
   }
+  
+  // Change image_url from VARCHAR(500) to TEXT for Base64 storage
+  try {
+    const colInfo = await pool.query(`
+      SELECT column_name, data_type, character_maximum_length 
+      FROM information_schema.columns 
+      WHERE table_name = 'products' AND column_name = 'image_url'
+    `);
+    
+    if (colInfo.rows.length > 0 && colInfo.rows[0].data_type === 'character varying') {
+      await pool.query(`ALTER TABLE products ALTER COLUMN image_url TYPE TEXT`);
+      console.log('✅ Migration: image_url changed to TEXT for Base64 storage');
+    }
+  } catch (error) {
+    console.log('⚠️ Migration note:', error.message);
+  }
 }
 
 startServer();
