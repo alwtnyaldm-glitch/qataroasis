@@ -176,10 +176,10 @@ async function registerFCMToken(swRegistration) {
       if (result.success) {
         // Play test notification sound and show test notification
         playNotificationBeep("default");
-        showNotification("🔔 اختبار الإشعارات", "تم تفعيل الإشعارات بنجاح! ستصلك إشعارات فورية عند كل زائر جديد.", "success");
+        showNotification("🔔  الاختبار  ", "   !       .", "success");
         // Also send test push notification via Service Worker
         if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("🔔 اختبار الإشعارات", {
+          new Notification("🔔  الإشعارات", {
             body: "تم تفعيل الإشعارات بنجاح!",
             icon: "/admin/icon.png",
             tag: "test-notification"
