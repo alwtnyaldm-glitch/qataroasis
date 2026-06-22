@@ -27,7 +27,7 @@ messaging.onBackgroundMessage((payload) => {
   
   const notificationTitle = payload.notification?.title || 'إشعار جديد';
   const notificationOptions = {
-    body: payload.notification?.body || 'لديك إشعار جديد',
+    body: payload.notification?.body || ' إشعار جديد',
     icon: '/admin/icon.png',
     badge: '/admin/badge.png',
     tag: payload.data?.type || 'general',
