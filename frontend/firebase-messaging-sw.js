@@ -9,7 +9,7 @@
 importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/9.22.0/firebase-messaging-compat.js');
 
-// Firebase configuration
+// Firebase configuration - MUST match backend firebase-admin.js project
 firebase.initializeApp({
   apiKey: "AIzaSyA9sRFkHrqOlRkyMfzl4AyK618J12D_uk8",
   authDomain: "adminqatar-d4192.firebaseapp.com",
@@ -19,7 +19,6 @@ firebase.initializeApp({
   appId: "1:927564639029:web:025a0c2e77ce6bba367a7c"
 });
 
-// Set VAPID key for push notifications
 const messaging = firebase.messaging();
 
 // Handle background messages
